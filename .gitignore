@@ -1,0 +1,7 @@
+# Datasets and experimental results
+data/
+outputs/
+
+# Python cache
+__pycache__/
+*.pyc
