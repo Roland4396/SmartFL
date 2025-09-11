@@ -1,0 +1,22 @@
+=== 测试层次化约束修复 ===
+FLOPs约束设置: {0: 40.0, 1: 80.0, 2: 150.0, 3: 250.0}
+开始针对性训练...
+Starting PPO training for hierarchical model selection...
+Environment: 4 levels, FLOPs constraints: {0: 40.0, 1: 80.0, 2: 150.0, 3: 250.0}
+❌ 测试失败: 'ModelConfig' object is not subscriptable
+Traceback (most recent call last):
+  File "d:\compile\SmartFL\test_hierarchical_constraints.py", line 40, in test_hierarchical_constraints
+    agent.train(num_iterations=50, episodes_per_iteration=10)
+  File "d:\compile\SmartFL\ppo_model_selector.py", line 971, in train
+    avg_reward = self.collect_trajectories(episodes_per_iteration)
+  File "d:\compile\SmartFL\ppo_model_selector.py", line 825, in collect_trajectories
+    next_obs, reward, done, _, info = self.env.step(action)
+  File "d:\compile\SmartFL\ppo_model_selector.py", line 227, in step
+    reward += self._calculate_final_reward()
+  File "d:\compile\SmartFL\ppo_model_selector.py", line 422, in _calculate_final_reward
+    progression_bonus = self._calculate_progression_bonus()
+  File "d:\compile\SmartFL\ppo_model_selector.py", line 464, in _calculate_progression_bonus
+    if next_config['total_conv_nuclear_norm'] >= curr_config['total_conv_nuclear_norm']:
+TypeError: 'ModelConfig' object is not subscriptable
+
+🔧 还需要进一步调试

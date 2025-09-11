@@ -1,0 +1,823 @@
+"""
+PPO-based Architecture Generator for SmartFL
+
+Replaces brute_force_search.py with intelligent PPO search.
+Generates architecture configurations with the same output format.
+"""
+
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+import numpy as np
+import gymnasium as gym
+from gymnasium import spaces
+import json
+from typing import Dict, List, Tuple, Any
+from dataclasses import dataclass
+from tqdm import tqdm
+
+from models.searchable_resnet import SearchableResNet
+from utils.metrics import calculate_total_conv_nuclear_norm, calculate_model_size
+from utils.op_counter import measure_model
+
+
+@dataclass
+class ArchConfig:
+    """Architecture configuration"""
+    width_multipliers: List[float]
+    early_exit_location: int
+    flops_m: float
+    total_conv_nuclear_norm: float
+    num_params: int = 0
+
+    def to_dict(self) -> Dict:
+        return {
+            'width_multipliers': self.width_multipliers,
+            'early_exit_location': self.early_exit_location,
+            'flops_m': self.flops_m,
+            'total_conv_nuclear_norm': self.total_conv_nuclear_norm,
+            'num_params': self.num_params
+        }
+
+
+class ArchitectureSearchEnv(gym.Env):
+    """
+    PPO Environment for Architecture Search
+    
+    Task: Generate diverse, high-quality architectures (maximize nuclear norm)
+    No FLOPs constraints - let hierarchical_model_selector handle filtering
+    """
+    
+    def __init__(self, 
+                 supernet_state_dict: Dict,
+                 width_options: List[float] = None,
+                 exit_location_range: Tuple[int, int] = (28, 54),
+                 num_stages: int = 3):
+        
+        super().__init__()
+        
+        self.supernet_state_dict = supernet_state_dict
+        self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
+        self.exit_location_range = exit_location_range
+        self.num_stages = num_stages
+        
+        # Define action and observation spaces
+        self._define_spaces()
+    
+    def _define_spaces(self):
+        """Define action and observation spaces"""
+        # Action space: width multipliers for each stage + early exit location
+        width_low = np.array([min(self.width_options)] * self.num_stages, dtype=np.float32)
+        width_high = np.array([max(self.width_options)] * self.num_stages, dtype=np.float32)
+        
+        self.action_space = spaces.Dict({
+            'width_multipliers': spaces.Box(low=width_low, high=width_high, dtype=np.float32),
+            'exit_location': spaces.Discrete(self.exit_location_range[1] - self.exit_location_range[0])
+        })
+        
+        # Observation space: simple exploration signal (random noise)
+        # PPO doesn't need complex state since task is just "generate good architectures"
+        self.observation_space = spaces.Box(
+            low=0.0, high=1.0, shape=(3,), dtype=np.float32  # Minimal state
+        )
+    
+    def reset(self, seed=None) -> Tuple[np.ndarray, Dict]:
+        """Reset environment for new episode"""
+        super().reset(seed=seed)
+        
+        # Random exploration signal - encourages diversity
+        obs = np.random.uniform(0, 1, size=3).astype(np.float32)
+        
+        info = {}
+        return obs, info
+    
+    def step(self, action: Dict[str, np.ndarray]) -> Tuple[np.ndarray, float, bool, bool, Dict]:
+        """Execute one step with configuration caching"""
+        # Parse action
+        width_multipliers = action['width_multipliers'].tolist()
+        exit_location = self.exit_location_range[0] + int(action['exit_location'])
+        
+        # Quantize width multipliers to valid options
+        quantized_widths = []
+        for w in width_multipliers:
+            quantized_w = min(self.width_options, key=lambda x: abs(x - w))
+            quantized_widths.append(quantized_w)
+        
+        # Create config ID for caching
+        config_id = (tuple(quantized_widths), exit_location)
+        
+        # Check cache first
+        if hasattr(self, 'config_cache') and config_id in self.config_cache:
+            # Use cached configuration - no expensive computation!
+            config = self.config_cache[config_id]
+            reward = self._calculate_reward(config)
+            
+            info = {
+                'config': config.to_dict(),
+                'reward_components': {
+                    'nuclear_norm': config.total_conv_nuclear_norm,
+                    'flops_m': config.flops_m,
+                    'num_params': config.num_params
+                },
+                'from_cache': True
+            }
+        else:
+            # Expensive computation only for new configurations
+            try:
+                config = self._evaluate_architecture(quantized_widths, exit_location)
+                reward = self._calculate_reward(config)
+                
+                # Cache the result
+                if hasattr(self, 'config_cache'):
+                    self.config_cache[config_id] = config
+                
+                info = {
+                    'config': config.to_dict(),
+                    'reward_components': {
+                        'nuclear_norm': config.total_conv_nuclear_norm,
+                        'flops_m': config.flops_m,
+                        'num_params': config.num_params
+                    },
+                    'from_cache': False
+                }
+                
+            except Exception as e:
+                # Invalid architecture
+                reward = -100.0
+                info = {'error': str(e), 'config': None, 'from_cache': False}
+        
+        # Episode is always done after one step (single-step task)
+        obs = np.random.uniform(0, 1, size=3).astype(np.float32)  # New random state
+        
+        return obs, reward, True, False, info
+    
+    def _evaluate_architecture(self, width_multipliers: List[float], exit_location: int) -> ArchConfig:
+        """Evaluate a single architecture"""
+        
+        # Create subnet with random initialization (not pretrained weights)
+        subnet = SearchableResNet(
+            num_blocks=[18, 18, 18],
+            num_classes=100,
+            width_multipliers=width_multipliers,
+            early_exit_location=exit_location
+        )
+        subnet.eval()
+        
+        # Calculate FLOPs using op_counter (fair comparison without pretrained weights)
+        cls_ops, cls_params = measure_model(subnet, H=32, W=32, exit_idx=0)
+        flops_m = cls_ops[0] / 1e6 if cls_ops else 0.0
+        
+        # For nuclear norm calculation, we still need pretrained weights
+        # Create a separate subnet with pretrained weights for nuclear norm only
+        pretrained_subnet = SearchableResNet(
+            num_blocks=[18, 18, 18],
+            num_classes=100,
+            width_multipliers=width_multipliers,
+            early_exit_location=exit_location
+        )
+        sliced_state_dict = self._get_sub_network_state_dict(pretrained_subnet)
+        pretrained_subnet.load_state_dict(sliced_state_dict)
+        
+        nuclear_norm = calculate_total_conv_nuclear_norm(pretrained_subnet, early_exit_location=exit_location)
+        num_params = calculate_model_size(subnet, early_exit_location=exit_location)
+        
+        return ArchConfig(
+            width_multipliers=width_multipliers,
+            early_exit_location=exit_location,
+            flops_m=flops_m,
+            total_conv_nuclear_norm=nuclear_norm,
+            num_params=num_params
+        )
+    
+    def _get_sub_network_state_dict(self, subnet_model):
+        """Extract subnet weights from supernet (simplified version)"""
+        subnet_state_dict = subnet_model.state_dict()
+        
+        for key, supernet_param in self.supernet_state_dict.items():
+            if key in subnet_state_dict:
+                subnet_param = subnet_state_dict[key]
+                
+                if supernet_param.shape == subnet_param.shape:
+                    subnet_param.data.copy_(supernet_param.data)
+                else:
+                    # Handle shape mismatch (width scaling)
+                    if supernet_param.dim() > 1:  # Conv layers
+                        min_dim0 = min(supernet_param.shape[0], subnet_param.shape[0])
+                        min_dim1 = min(supernet_param.shape[1], subnet_param.shape[1])
+                        sliced_param = supernet_param[:min_dim0, :min_dim1, ...]
+                        
+                        if sliced_param.shape == subnet_param.shape:
+                            subnet_param.data.copy_(sliced_param)
+                    else:  # BN/Linear layers
+                        min_dim0 = min(supernet_param.shape[0], subnet_param.shape[0])
+                        subnet_param.data.copy_(supernet_param[:min_dim0])
+        
+        return subnet_state_dict
+    
+    def _calculate_reward(self, config: ArchConfig) -> float:
+        """
+        计算架构奖励：最大化核范数 + 鼓励探索多样性
+        不考虑FLOPs和参数量约束，但会记录这些值供后续使用
+        """
+        
+        # 主要奖励：核范数最大化（归一化）
+        nuclear_norm_reward = config.total_conv_nuclear_norm / 1000.0
+        
+        # 探索奖励：鼓励宽度配置的多样性
+        width_variance = np.var(config.width_multipliers)
+        diversity_bonus = width_variance * 0.3
+        
+        # 探索激励：鼓励探索不同的宽度范围
+        min_width = min(config.width_multipliers)
+        max_width = max(config.width_multipliers)
+        exploration_bonus = (max_width - min_width) * 0.2
+        
+        # 基础有效性奖励
+        validity_bonus = 1.0
+        
+        total_reward = nuclear_norm_reward + diversity_bonus + exploration_bonus + validity_bonus
+        
+        return total_reward
+
+
+class PPOArchitectureNetwork(nn.Module):
+    """PPO Network for Architecture Search"""
+    
+    def __init__(self, obs_dim: int, width_action_dim: int, exit_action_dim: int, hidden_dim: int = 128):
+        super().__init__()
+        
+        self.obs_dim = obs_dim
+        self.width_action_dim = width_action_dim
+        self.exit_action_dim = exit_action_dim
+        
+        # Shared feature extractor
+        self.feature_extractor = nn.Sequential(
+            nn.Linear(obs_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim),
+            nn.ReLU()
+        )
+        
+        # Width multipliers actor (continuous)
+        self.width_actor_mean = nn.Linear(hidden_dim, width_action_dim)
+        self.width_actor_logstd = nn.Parameter(torch.zeros(1, width_action_dim))
+        
+        # Exit location actor (discrete)
+        self.exit_actor = nn.Linear(hidden_dim, exit_action_dim)
+        
+        # Critic
+        self.critic = nn.Linear(hidden_dim, 1)
+        
+        self._init_weights()
+    
+    def _init_weights(self):
+        """Initialize weights"""
+        for m in self.modules():
+            if isinstance(m, nn.Linear):
+                nn.init.orthogonal_(m.weight, gain=0.1)
+                nn.init.constant_(m.bias, 0)
+    
+    def forward(self, obs: torch.Tensor):
+        """Forward pass"""
+        features = self.feature_extractor(obs)
+        
+        # Width multipliers
+        width_mean = torch.sigmoid(self.width_actor_mean(features))  # [0, 1]
+        width_mean = width_mean * 0.5 + 0.5  # Scale to [0.5, 1.0]
+        width_logstd = self.width_actor_logstd.expand_as(width_mean)
+        
+        # Exit location
+        exit_logits = self.exit_actor(features)
+        
+        # Value
+        value = self.critic(features)
+        
+        return width_mean, width_logstd, exit_logits, value
+    
+    def get_action(self, obs: torch.Tensor, deterministic: bool = False, exploration_bonus: float = 0.0, eeloc_region: tuple = None):
+        """Enhanced action sampling with exploration bonus and optional eeloc region constraint"""
+        width_mean, width_logstd, exit_logits, _ = self.forward(obs)
+        
+        if deterministic:
+            width_action = width_mean
+            exit_action = torch.argmax(exit_logits, dim=-1)
+        else:
+            # Dynamic exploration adjustment
+            base_std = torch.exp(width_logstd)
+            exploration_std = base_std * (1.0 + exploration_bonus)
+            
+            width_dist = torch.distributions.Normal(width_mean, exploration_std)
+            width_action = width_dist.sample()
+            width_action = torch.clamp(width_action, 0.5, 1.0)
+            
+            # Temperature sampling for exit location with optional region constraint
+            temperature = 1.0 + exploration_bonus
+            
+            if eeloc_region is not None:
+                # Apply region constraint to exit location
+                min_exit, max_exit = eeloc_region
+                # Create mask for valid exit locations
+                mask = torch.full_like(exit_logits, -float('inf'))
+                mask[:, min_exit-28:max_exit-28+1] = 0  # Adjust for 0-based indexing
+                constrained_logits = exit_logits + mask
+                exit_probs = F.softmax(constrained_logits / temperature, dim=-1)
+            else:
+                exit_probs = F.softmax(exit_logits / temperature, dim=-1)
+            
+            exit_dist = torch.distributions.Categorical(exit_probs)
+            exit_action = exit_dist.sample()
+        
+        # Calculate log probabilities using original parameters (for training stability)
+        width_log_prob = -0.5 * (((width_action - width_mean) / torch.exp(width_logstd)) ** 2 + 
+                                2 * width_logstd + np.log(2 * np.pi))
+        width_log_prob = width_log_prob.sum(dim=-1)
+        
+        exit_log_prob = F.log_softmax(exit_logits, dim=-1).gather(1, exit_action.unsqueeze(-1)).squeeze(-1)
+        
+        total_log_prob = width_log_prob + exit_log_prob
+        
+        action = {
+            'width_multipliers': width_action,
+            'exit_location': exit_action
+        }
+        
+        return action, total_log_prob
+    
+    def get_value(self, obs: torch.Tensor):
+        """Get value estimate"""
+        _, _, _, value = self.forward(obs)
+        return value.squeeze(-1)
+
+
+class PPOArchitectureAgent:
+    """Enhanced PPO Agent for Architecture Search with improved exploration"""
+    
+    def __init__(self, env: ArchitectureSearchEnv,
+                 learning_rate: float = 3e-4,
+                 gamma: float = 0.99,
+                 clip_epsilon: float = 0.2,
+                 entropy_coef: float = 0.01,
+                 value_coef: float = 0.5):
+        
+        self.env = env
+        self.gamma = gamma
+        self.clip_epsilon = clip_epsilon
+        self.entropy_coef = entropy_coef
+        self.value_coef = value_coef
+        
+        # Network
+        obs_dim = env.observation_space.shape[0]
+        width_action_dim = env.num_stages
+        exit_action_dim = env.exit_location_range[1] - env.exit_location_range[0]
+        
+        self.network = PPOArchitectureNetwork(obs_dim, width_action_dim, exit_action_dim)
+        self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
+        
+        # Training data storage
+        self.experiences = []
+        
+        # Enhanced exploration parameters
+        self.reset_frequency = 50  # Reset every 50 batches
+        self.reset_ratio = 0.3     # Reset 30% of parameters
+        self.generation_history = []  # Track generated configurations for diversity calculation
+        
+        # Configuration cache to avoid recomputing metrics
+        self.config_cache = {}  # {config_id: ArchConfig}
+        
+        # TCP-like exploration control (AIMD: Additive Increase, Multiplicative Decrease)
+        self.exploration_strength = 0.8  # Start with high exploration
+        self.min_exploration = 0.05
+        self.max_exploration = 1.0
+        self.decrease_rate = 0.02  # Slow additive decrease when successful
+        self.increase_factor = 2.0  # Fast multiplicative increase when duplicates detected
+        
+        # Region-based search strategy
+        self.region_stats = {
+            0: {'generated': 0, 'unique': 0, 'success_rate': 0.0},  # [28, 35]
+            1: {'generated': 0, 'unique': 0, 'success_rate': 0.0},  # [36, 44] 
+            2: {'generated': 0, 'unique': 0, 'success_rate': 0.0}   # [45, 53]
+        }
+        self.region_boundaries = [(28, 35), (36, 44), (45, 53)]
+        self.exploration_phase_batches = 30  # First 30 batches use rotation
+    
+    def periodic_reset(self, batch_num):
+        """Periodically reset part of network parameters to prevent over-convergence"""
+        if batch_num % self.reset_frequency == 0 and batch_num > 0:
+            print(f"  → Periodic reset at batch {batch_num}")
+            
+            with torch.no_grad():
+                for name, param in self.network.named_parameters():
+                    if 'actor' in name:  # Only reset actor parameters
+                        # Randomly select parameters to reset
+                        reset_mask = torch.rand_like(param) < self.reset_ratio
+                        if reset_mask.any():
+                            # Reinitialize selected parameters
+                            init_values = torch.randn_like(param) * 0.1
+                            param.data = torch.where(reset_mask, init_values, param.data)
+    
+    def update_exploration_strength(self, batch_unique_ratio: float):
+        """TCP-like exploration control: slow decrease when good, fast increase when bad"""
+        if batch_unique_ratio > 0.7:  # High success rate (like low packet loss)
+            # Slow additive decrease (缓慢下降)
+            self.exploration_strength = max(
+                self.min_exploration, 
+                self.exploration_strength - self.decrease_rate
+            )
+        elif batch_unique_ratio < 0.3:  # High duplicate rate (like packet loss detected)
+            # Fast multiplicative increase (快速上升)
+            self.exploration_strength = min(
+                self.max_exploration, 
+                self.exploration_strength * self.increase_factor
+            )
+        # If 0.3 <= ratio <= 0.7, keep current strength (stable state)
+        
+        return self.exploration_strength
+    
+    def _calculate_exploration_bonus(self, batch_num: int = 0) -> float:
+        """Get current exploration strength (TCP-like controlled)"""
+        return self.exploration_strength
+    
+    def choose_search_region(self, batch_num: int) -> int:
+        """Choose which eeloc region to search based on hybrid strategy"""
+        if batch_num <= self.exploration_phase_batches:
+            # Phase 1: Rotation strategy - explore all regions equally
+            region = (batch_num - 1) % 3
+            return region
+        else:
+            # Phase 2: Adaptive strategy - focus on successful regions
+            # Calculate success rates
+            for region_id, stats in self.region_stats.items():
+                if stats['generated'] > 0:
+                    stats['success_rate'] = stats['unique'] / stats['generated']
+                else:
+                    stats['success_rate'] = 0.0
+            
+            # Choose region with weighted probability based on success rate
+            success_rates = [self.region_stats[i]['success_rate'] for i in range(3)]
+            
+            # Add small base probability to avoid completely abandoning regions
+            base_prob = 0.1
+            adjusted_rates = [rate + base_prob for rate in success_rates]
+            total = sum(adjusted_rates)
+            probabilities = [rate / total for rate in adjusted_rates]
+            
+            # Sample region based on probabilities
+            region = np.random.choice(3, p=probabilities)
+            return region
+    
+    def update_region_stats(self, region: int, generated_count: int, unique_count: int):
+        """Update statistics for a region"""
+        self.region_stats[region]['generated'] += generated_count
+        self.region_stats[region]['unique'] += unique_count
+    
+    def _calculate_diversity_from_history(self, config: ArchConfig) -> float:
+        """Calculate diversity reward based on distance from historical configurations"""
+        if len(self.generation_history) < 10:
+            return 1.0  # High reward for early configurations
+        
+        min_distance = float('inf')
+        recent_history = self.generation_history[-100:]  # Only consider recent 100 configs
+        
+        for hist_config in recent_history:
+            # Calculate distance in configuration space
+            width_dist = sum((a - b) ** 2 for a, b in 
+                            zip(config.width_multipliers, hist_config['width_multipliers']))
+            exit_dist = (config.early_exit_location - hist_config['early_exit_location']) ** 2
+            
+            distance = np.sqrt(width_dist + exit_dist * 0.01)  # Normalize exit distance
+            min_distance = min(min_distance, distance)
+        
+        return min_distance  # Higher distance = higher diversity reward
+    
+    def _is_duplicate(self, config: ArchConfig, configs: list) -> bool:
+        """Check if configuration is duplicate"""
+        config_id = (tuple(config.width_multipliers), config.early_exit_location)
+        existing_ids = {(tuple(c.width_multipliers), c.early_exit_location) for c in configs[-20:]}
+        return config_id in existing_ids
+    
+    def generate_architecture(self, num_episodes: int = 100) -> ArchConfig:
+        """Generate best architecture through exploration"""
+        
+        best_config = None
+        best_reward = float('-inf')
+        
+        for episode in range(num_episodes):
+            obs, _ = self.env.reset()
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0)
+            
+            # Get action
+            action, log_prob = self.network.get_action(obs_tensor, deterministic=False)  # Always explore
+            
+            # Convert to env format
+            action_env = {
+                'width_multipliers': action['width_multipliers'].squeeze(0).detach().numpy(),
+                'exit_location': action['exit_location'].squeeze(0).detach().numpy()
+            }
+            
+            # Step environment
+            _, reward, done, _, info = self.env.step(action_env)
+            
+            # Store experience for training
+            if 'config' in info and info['config'] is not None:
+                value = self.network.get_value(obs_tensor).item()
+                self.experiences.append({
+                    'obs': obs,
+                    'action': action,
+                    'reward': reward,
+                    'log_prob': log_prob.item(),
+                    'value': value
+                })
+                
+                # Track best config
+                if reward > best_reward:
+                    best_reward = reward
+                    config_data = info['config']
+                    best_config = ArchConfig(
+                        width_multipliers=config_data['width_multipliers'],
+                        early_exit_location=config_data['early_exit_location'],
+                        flops_m=config_data['flops_m'],
+                        total_conv_nuclear_norm=config_data['total_conv_nuclear_norm'],
+                        num_params=config_data['num_params']
+                    )
+        
+        return best_config
+
+    def generate_diverse_architectures(self, num_episodes: int = 100, batch_num: int = 0, search_region: int = None) -> List[ArchConfig]:
+        """Generate diverse architectures with enhanced exploration and optional region constraint"""
+        
+        configs = []
+        consecutive_duplicates = 0
+        
+        # Get region bounds if specified
+        eeloc_region = None
+        if search_region is not None:
+            eeloc_region = self.region_boundaries[search_region]
+        
+        # Calculate exploration bonus based on batch progress
+        exploration_bonus = self._calculate_exploration_bonus(batch_num)
+        
+        for episode in range(num_episodes):
+            obs, _ = self.env.reset()
+            obs_tensor = torch.FloatTensor(obs).unsqueeze(0)
+            
+            # Increase exploration if too many consecutive duplicates
+            current_exploration_bonus = exploration_bonus
+            if consecutive_duplicates > 5:
+                current_exploration_bonus += 0.2
+                consecutive_duplicates = 0
+            
+            # Get action with exploration bonus and optional region constraint
+            action, log_prob = self.network.get_action(obs_tensor, 
+                                                     deterministic=False,
+                                                     exploration_bonus=current_exploration_bonus,
+                                                     eeloc_region=eeloc_region)
+            
+            # Convert to env format
+            action_env = {
+                'width_multipliers': action['width_multipliers'].squeeze(0).detach().numpy(),
+                'exit_location': action['exit_location'].squeeze(0).detach().numpy()
+            }
+            
+            # Step environment
+            _, base_reward, done, _, info = self.env.step(action_env)
+            
+            # Store experience for training (ALWAYS store for PPO learning)
+            if 'config' in info and info['config'] is not None:
+                config_data = info['config']
+                config = ArchConfig(
+                    width_multipliers=config_data['width_multipliers'],
+                    early_exit_location=config_data['early_exit_location'],
+                    flops_m=config_data['flops_m'],
+                    total_conv_nuclear_norm=config_data['total_conv_nuclear_norm'],
+                    num_params=config_data['num_params']
+                )
+                
+                # Enhanced reward with diversity bonus
+                diversity_reward = self._calculate_diversity_from_history(config)
+                enhanced_reward = base_reward + 0.3 * diversity_reward
+                
+                value = self.network.get_value(obs_tensor).item()
+                self.experiences.append({
+                    'obs': obs,
+                    'action': action,
+                    'reward': enhanced_reward,  # Use enhanced reward
+                    'log_prob': log_prob.item(),
+                    'value': value
+                })
+                
+                configs.append(config)
+                
+                # Update generation history for future diversity calculations
+                self.generation_history.append(config_data)
+                if len(self.generation_history) > 200:  # Keep only recent history
+                    self.generation_history.pop(0)
+                
+                # Check for duplicates
+                if self._is_duplicate(config, configs):
+                    consecutive_duplicates += 1
+                else:
+                    consecutive_duplicates = 0
+        
+        return configs
+    
+    def update_policy(self):
+        """Update policy using collected experiences"""
+        if len(self.experiences) < 32:  # Minimum batch size
+            return
+        
+        # Prepare batch data
+        batch_size = min(64, len(self.experiences))
+        batch_indices = np.random.choice(len(self.experiences), batch_size, replace=False)
+        
+        obs_batch = torch.FloatTensor([self.experiences[i]['obs'] for i in batch_indices])
+        rewards_batch = torch.FloatTensor([self.experiences[i]['reward'] for i in batch_indices])
+        old_log_probs_batch = torch.FloatTensor([self.experiences[i]['log_prob'] for i in batch_indices])
+        old_values_batch = torch.FloatTensor([self.experiences[i]['value'] for i in batch_indices])
+        
+        # Reconstruct actions
+        width_actions = torch.FloatTensor([self.experiences[i]['action']['width_multipliers'].squeeze(0).detach().numpy() 
+                                         for i in batch_indices])
+        exit_actions = torch.LongTensor([self.experiences[i]['action']['exit_location'].squeeze(0).item() 
+                                       for i in batch_indices])
+        
+        actions_batch = {
+            'width_multipliers': width_actions,
+            'exit_location': exit_actions
+        }
+        
+        # PPO update
+        for _ in range(5):  # PPO epochs
+            # Forward pass
+            width_mean, width_logstd, exit_logits, values = self.network.forward(obs_batch)
+            
+            # Calculate new log probabilities
+            width_log_prob = -0.5 * (((width_actions - width_mean) / torch.exp(width_logstd)) ** 2 + 
+                                    2 * width_logstd + np.log(2 * np.pi))
+            width_log_prob = width_log_prob.sum(dim=-1)
+            
+            exit_log_prob = F.log_softmax(exit_logits, dim=-1).gather(1, exit_actions.unsqueeze(-1)).squeeze(-1)
+            new_log_probs = width_log_prob + exit_log_prob
+            
+            # PPO loss
+            ratio = torch.exp(new_log_probs - old_log_probs_batch)
+            advantages = rewards_batch - old_values_batch
+            advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
+            
+            surr1 = ratio * advantages
+            surr2 = torch.clamp(ratio, 1 - self.clip_epsilon, 1 + self.clip_epsilon) * advantages
+            policy_loss = -torch.min(surr1, surr2).mean()
+            
+            value_loss = F.mse_loss(values.squeeze(-1), rewards_batch)
+            
+            # Entropy for exploration
+            width_entropy = 0.5 * (1 + np.log(2 * np.pi)) + width_logstd.mean()
+            exit_entropy = -(F.softmax(exit_logits, dim=-1) * F.log_softmax(exit_logits, dim=-1)).sum(dim=-1).mean()
+            entropy = width_entropy + exit_entropy
+            
+            total_loss = policy_loss + self.value_coef * value_loss - self.entropy_coef * entropy
+            
+            # Backward pass
+            self.optimizer.zero_grad()
+            total_loss.backward()
+            torch.nn.utils.clip_grad_norm_(self.network.parameters(), 0.5)
+            self.optimizer.step()
+        
+        # Clear experiences
+        self.experiences = []
+
+
+def generate_architecture_library(supernet_path: str, 
+                                output_path: str = 'ppo_architecture_library.json',
+                                num_architectures: int = 500,
+                                episodes_per_batch: int = 200) -> List[Dict]:
+    """
+    Generate diverse architecture library using PPO search
+    
+    Args:
+        supernet_path: Path to trained supernet
+        output_path: Output JSON file path  
+        num_architectures: Target number of architectures to generate
+        episodes_per_batch: Episodes per generation batch
+    
+    Returns:
+        List of architecture configurations
+    """
+    
+    print("=== PPO Architecture Library Generation ===")
+    print("Goal: Generate diverse, high-quality architectures")
+    print("No FLOPs constraints - hierarchical_model_selector will filter later")
+    
+    # Load supernet
+    print(f"Loading supernet from: {supernet_path}")
+    try:
+        supernet_state_dict = torch.load(supernet_path, map_location='cpu')
+        print("✓ Supernet loaded successfully")
+    except Exception as e:
+        print(f"✗ Failed to load supernet: {e}")
+        return []
+    
+    print(f"Target architectures: {num_architectures}")
+    print(f"Episodes per batch: {episodes_per_batch}")
+    
+    # Create environment and agent
+    env = ArchitectureSearchEnv(supernet_state_dict)
+    agent = PPOArchitectureAgent(env)
+    
+    # Share cache between agent and environment
+    env.config_cache = agent.config_cache
+    
+    all_configs = []
+    seen_configs = set()  # Avoid duplicates
+    
+    # Generate architectures until we have enough unique ones
+    batch = 0
+    max_batches = 1000  # Safety limit to prevent infinite loop
+    
+    while len(all_configs) < num_architectures and batch < max_batches:
+        batch += 1
+        
+        # Choose search region using hybrid strategy
+        search_region = agent.choose_search_region(batch)
+        region_bounds = agent.region_boundaries[search_region]
+        
+        print(f"\n--- Batch {batch} (Target: {num_architectures}, Current: {len(all_configs)}) ---")
+        if batch <= agent.exploration_phase_batches:
+            print(f"🔄 Rotation Phase: Searching eeloc region {search_region} [{region_bounds[0]}-{region_bounds[1]}]")
+        else:
+            success_rates = [f"{agent.region_stats[i]['success_rate']:.1%}" for i in range(3)]
+            print(f"🎯 Adaptive Phase: Chosen region {search_region} [{region_bounds[0]}-{region_bounds[1]}] (Success rates: {success_rates})")
+        
+        # Apply periodic reset for enhanced exploration
+        agent.periodic_reset(batch)
+        
+        # Generate diverse architectures with batch and region context
+        batch_configs = agent.generate_diverse_architectures(episodes_per_batch, batch_num=batch, search_region=search_region)
+        
+        new_configs_count = 0
+        for config in batch_configs:
+            config_id = (tuple(config.width_multipliers), config.early_exit_location)
+            
+            if config_id not in seen_configs:
+                seen_configs.add(config_id)
+                config_dict = config.to_dict()
+                all_configs.append(config_dict)
+                new_configs_count += 1
+                
+                print(f"✓ Generated: width={[f'{w:.2f}' for w in config.width_multipliers]}, "
+                      f"exit={config.early_exit_location}, "
+                      f"FLOPs={config.flops_m:.1f}M, "
+                      f"norm={config.total_conv_nuclear_norm:.1f}, "
+                      f"params={config.num_params}")
+                
+                # Stop adding if we've reached the target
+                if len(all_configs) >= num_architectures:
+                    break
+        
+        # Calculate batch unique ratio for TCP-like control
+        batch_unique_ratio = new_configs_count / len(batch_configs) if batch_configs else 0.0
+        
+        # Update exploration strength based on success rate
+        new_exploration = agent.update_exploration_strength(batch_unique_ratio)
+        
+        # Update region statistics
+        agent.update_region_stats(search_region, len(batch_configs), new_configs_count)
+        
+        if new_configs_count == 0:
+            print(f"⚠ No new unique configs in this batch (found {len(batch_configs)} total)")
+            print(f"  Current unique count: {len(all_configs)}/{num_architectures}")
+            print(f"  Unique ratio: {batch_unique_ratio:.1%} → Exploration: {new_exploration:.3f} ↑")
+            print(f"  Cache size: {len(agent.config_cache)} cached configurations")
+        else:
+            print(f"✓ Added {new_configs_count} new configs from {len(batch_configs)} generated")
+            print(f"  Unique ratio: {batch_unique_ratio:.1%} → Exploration: {new_exploration:.3f}")
+            print(f"  Cache size: {len(agent.config_cache)} cached configurations")
+        
+        # Update policy periodically
+        if batch % 3 == 0:
+            agent.update_policy()
+            print("  → Policy updated")
+    
+    # Check if we reached the target
+    if len(all_configs) < num_architectures:
+        print(f"\n⚠ Warning: Only generated {len(all_configs)} unique configs out of {num_architectures} target after {max_batches} batches")
+        print("Consider increasing episodes_per_batch or adjusting PPO parameters for better diversity")
+    
+    # Save results
+    with open(output_path, 'w') as f:
+        json.dump(all_configs, f, indent=4)
+    
+    print(f"\n=== Generation Complete ===")
+    print(f"Generated {len(all_configs)} unique architecture configurations")
+    print(f"Saved to: {output_path}")
+    print(f"Range of FLOPs: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
+    print(f"Range of nuclear norm: {min(c['total_conv_nuclear_norm'] for c in all_configs):.1f} - {max(c['total_conv_nuclear_norm'] for c in all_configs):.1f}")
+    
+    return all_configs
+
+
+if __name__ == "__main__":
+    # Example usage
+    generate_architecture_library(
+        supernet_path='supernet.pth',
+        output_path='ppo_architecture_library.json'
+    )
