@@ -7,6 +7,7 @@ def modify_args(args):
     if args.use_gpu and args.gpu_idx:
         os.environ["CUDA_VISIBLE_DEVICES"] = args.gpu_idx
 
+
     if args.use_valid:
         args.splits = ['train', 'val', 'test']
     else:
@@ -18,23 +19,17 @@ def modify_args(args):
     elif args.data == 'cifar100':
         args.num_classes = 100
         args.image_size = (32, 32)
-    elif args.data == 'imagenet':
-        args.num_classes = 1000
-        if 'effnetb4' in args.arch:
-            args.image_size = (224, 224)
-        else:
-            args.image_size = (64, 64)
-    elif args.data == 'sst2':
-        args.num_classes = 2
-        args.image_size = (1, 64)
-    elif args.data == 'ag_news':
-        args.num_classes = 4
-        args.image_size = (1, 64)
+    elif args.data == 'tiny_imagenet':
+        args.num_classes = 200
+        args.image_size = (64, 64)
     else:
         raise NotImplementedError
 
     if not hasattr(args, "save_path") or args.save_path is None:
-        args.save_path = f"outputs/强化学习param&&flops"
+        model_name = getattr(args, 'model', 'vgg')
+        dataset_name = getattr(args, 'data', 'cifar100')
+        alpha = getattr(args, 'alpha', 100)
+        args.save_path = f"outputs/{model_name}_{dataset_name}_{alpha}_independent"
 
     # Sync supernet training parameters
     if hasattr(args, 'supernet_lr') and args.supernet_lr != args.lr:
@@ -47,8 +42,8 @@ def modify_args(args):
 
 model_names = ['msdnet24_1', 'msdnet24_4',
                'resnet110_1', 'resnet110_4',
-               'effnetb4_1', 'effnetb4_4',
-               'bert_1', 'bert_4']
+               'vgg16_1', 'vgg16_4',
+               'mobilenet_v2_1', 'mobilenet_v2_4']
 
 arg_parser = argparse.ArgumentParser(
     description='Image classification PK main script')
@@ -74,7 +69,7 @@ exp_group.add_argument('--use_gpu', default=1, type=int, help='Use CPU if zero')
 # dataset related
 data_group = arg_parser.add_argument_group('data', 'dataset setting')
 data_group.add_argument('--data', metavar='D', default='cifar100',
-                        choices=['cifar10', 'cifar100', 'imagenet', 'sst2', 'ag_news'],
+                        choices=['cifar10', 'cifar100', 'tiny_imagenet'],
                         help='data to work on')
 data_group.add_argument('--data-root', metavar='DIR', default='data',
                         help='path to dataset (default: data)')
@@ -86,6 +81,9 @@ data_group.add_argument('-jj', '--num_fed_workers', default=1, type=int, metavar
                         help='number of fl workers (default: 1)')
 # model arch related
 arch_group = arg_parser.add_argument_group('arch', 'model architecture setting')
+arch_group.add_argument('--model', metavar='MODEL', default='resnet',
+                        choices=['resnet', 'vgg', 'mobilenet'],
+                        help='model type to use (default: resnet)')
 arch_group.add_argument('--arch', '-a', metavar='ARCH', default='resnet110_4',
                         type=str, choices=model_names,
                         help='model architecture: ' +
@@ -120,10 +118,12 @@ fl_group.add_argument('--alpha', type=int, default=100,
                       help='data nonIID alpha')
 fl_group.add_argument('-trs', '--track_running_stats', action='store_true',
                       help='trs')
-fl_group.add_argument('--flops_constraints', type=float, nargs='*', default=[83.4,99.7,138.5,253.1],
+fl_group.add_argument('--flops_constraints', type=float, nargs='*', default=[285.9737, 443.4474, 513.4869, 532.4800],
                       help='Max FLOPs (M) for each level (0 to 3)')
-fl_group.add_argument('--params_constraints', type=float, nargs='*', default=[0.21,0.46,0.86,1.73],
+fl_group.add_argument('--params_constraints', type=float, nargs='*', default=[5.7838, 10.1540, 18.5467, 34.0154],
                       help='Max parameters (M) for each level (0 to 3). Optional, same length as flops_constraints if provided.')
+fl_group.add_argument('--independent_selection', action='store_true',
+                      help='Use independent model selection (no hierarchical constraints). Each level independently maximizes nuclear norm.')
 
 # Three-stage pipeline control
 pipeline_group = arg_parser.add_argument_group('pipeline', 'Three-stage pipeline control')
@@ -138,7 +138,7 @@ pipeline_group.add_argument('--stages_only', type=str, default=None,
 
 # Stage 1: Supernet training parameters
 stage1_group = arg_parser.add_argument_group('stage1', 'Supernet training parameters')
-stage1_group.add_argument('--supernet_epochs', type=int, default=200,
+stage1_group.add_argument('--supernet_epochs', type=int, default=100,
                          help='Number of epochs for supernet training')
 stage1_group.add_argument('--supernet_lr', type=float, default=0.1,
                          help='Learning rate for supernet training')
@@ -159,5 +159,5 @@ stage2_group.add_argument('--episodes_per_batch', type=int, default=100,
                          help='PPO episodes per batch for architecture generation')
 stage2_group.add_argument('--ppo_learning_rate', type=float, default=0.001,
                          help='Learning rate for PPO agent')
-stage2_group.add_argument('--config_library_path', type=str, default='ppo_architecture_library.json',
-                         help='Path to save/load architecture configuration library')
+stage2_group.add_argument('--config_library_path', type=str, default=None,
+                         help='Path to save/load architecture configuration library. If not specified, will auto-generate based on model and dataset')

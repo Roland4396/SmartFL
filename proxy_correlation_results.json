@@ -1,0 +1,2602 @@
+[
+    {
+        "config_idx": 0,
+        "nuclear_norm": 802.8368704989552,
+        "accuracy": 67.37,
+        "flops_m": 143.797716,
+        "params": 572081,
+        "width_multipliers": [
+            1.0,
+            0.6111111111111112,
+            0.9444444444444444
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 1,
+        "nuclear_norm": 410.7865713313222,
+        "accuracy": 62.12,
+        "flops_m": 139.262492,
+        "params": 285320,
+        "width_multipliers": [
+            1.0,
+            0.9444444444444444,
+            0.7777777777777778
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 2,
+        "nuclear_norm": 265.7802055552602,
+        "accuracy": 52.72,
+        "flops_m": 102.684324,
+        "params": 147920,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            1.0
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 3,
+        "nuclear_norm": 506.89899847190827,
+        "accuracy": 65.61,
+        "flops_m": 79.321444,
+        "params": 319355,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.5,
+            1.0
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 4,
+        "nuclear_norm": 932.3373415088281,
+        "accuracy": 68.17,
+        "flops_m": 117.565796,
+        "params": 715538,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 5,
+        "nuclear_norm": 1328.3582643214613,
+        "accuracy": 67.27,
+        "flops_m": 196.257868,
+        "params": 944431,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 6,
+        "nuclear_norm": 547.2512843753211,
+        "accuracy": 63.78,
+        "flops_m": 70.455568,
+        "params": 337608,
+        "width_multipliers": [
+            0.5,
+            0.6666666666666666,
+            0.5555555555555556
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 7,
+        "nuclear_norm": 594.9300273135304,
+        "accuracy": 65.82,
+        "flops_m": 123.190152,
+        "params": 372343,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 8,
+        "nuclear_norm": 483.1957178786397,
+        "accuracy": 62.43,
+        "flops_m": 127.52528,
+        "params": 278036,
+        "width_multipliers": [
+            1.0,
+            0.6666666666666666,
+            0.6111111111111112
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 9,
+        "nuclear_norm": 635.6851668502204,
+        "accuracy": 65.31,
+        "flops_m": 97.779788,
+        "params": 428384,
+        "width_multipliers": [
+            0.5,
+            0.8888888888888888,
+            0.6666666666666666
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 10,
+        "nuclear_norm": 1158.1825402919203,
+        "accuracy": 68.82,
+        "flops_m": 196.508004,
+        "params": 905775,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 11,
+        "nuclear_norm": 322.14795572310686,
+        "accuracy": 59.02,
+        "flops_m": 117.645764,
+        "params": 203600,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            0.8333333333333333
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 12,
+        "nuclear_norm": 1205.0497492030263,
+        "accuracy": 68.38,
+        "flops_m": 200.577868,
+        "params": 859136,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 13,
+        "nuclear_norm": 816.4983487273566,
+        "accuracy": 66.95,
+        "flops_m": 124.317832,
+        "params": 603685,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.7777777777777778
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 14,
+        "nuclear_norm": 858.9458854342811,
+        "accuracy": 66.97,
+        "flops_m": 81.471556,
+        "params": 652216,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.8888888888888888
+        ],
+        "early_exit": 46
+    },
+    {
+        "config_idx": 15,
+        "nuclear_norm": 596.6210410324857,
+        "accuracy": 62.51,
+        "flops_m": 128.2593,
+        "params": 406971,
+        "width_multipliers": [
+            0.7222222222222222,
+            1.0,
+            0.5
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 16,
+        "nuclear_norm": 721.4879705272615,
+        "accuracy": 64.55,
+        "flops_m": 157.1361,
+        "params": 488214,
+        "width_multipliers": [
+            0.8888888888888888,
+            1.0,
+            0.5
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 17,
+        "nuclear_norm": 888.9358929861337,
+        "accuracy": 65.07,
+        "flops_m": 111.70122,
+        "params": 575473,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.8888888888888888,
+            0.5
+        ],
+        "early_exit": 52
+    },
+    {
+        "config_idx": 18,
+        "nuclear_norm": 413.37158185988665,
+        "accuracy": 63.95,
+        "flops_m": 141.76586,
+        "params": 293968,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 19,
+        "nuclear_norm": 698.9821241572499,
+        "accuracy": 67.01,
+        "flops_m": 177.639124,
+        "params": 466568,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.9444444444444444
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 20,
+        "nuclear_norm": 227.96271564019844,
+        "accuracy": 57.0,
+        "flops_m": 55.310176,
+        "params": 148458,
+        "width_multipliers": [
+            0.5,
+            0.7222222222222222,
+            0.6666666666666666
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 21,
+        "nuclear_norm": 903.5352654601447,
+        "accuracy": 65.17,
+        "flops_m": 107.107556,
+        "params": 588144,
+        "width_multipliers": [
+            0.5,
+            0.8888888888888888,
+            0.5
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 22,
+        "nuclear_norm": 140.9818091536872,
+        "accuracy": 50.13,
+        "flops_m": 35.755684,
+        "params": 74280,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 23,
+        "nuclear_norm": 790.5952299311757,
+        "accuracy": 66.08,
+        "flops_m": 157.394464,
+        "params": 520385,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            0.6111111111111112
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 24,
+        "nuclear_norm": 465.9506957260892,
+        "accuracy": 63.49,
+        "flops_m": 119.9137,
+        "params": 340923,
+        "width_multipliers": [
+            0.7222222222222222,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 25,
+        "nuclear_norm": 348.495050502941,
+        "accuracy": 62.72,
+        "flops_m": 107.724004,
+        "params": 245957,
+        "width_multipliers": [
+            0.8333333333333333,
+            1.0,
+            1.0
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 26,
+        "nuclear_norm": 506.86137373000383,
+        "accuracy": 64.61,
+        "flops_m": 160.705764,
+        "params": 368208,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 27,
+        "nuclear_norm": 1282.276682391297,
+        "accuracy": 68.82,
+        "flops_m": 132.442248,
+        "params": 959649,
+        "width_multipliers": [
+            0.5,
+            0.8888888888888888,
+            0.7777777777777778
+        ],
+        "early_exit": 52
+    },
+    {
+        "config_idx": 28,
+        "nuclear_norm": 392.0962567473762,
+        "accuracy": 63.09,
+        "flops_m": 95.825124,
+        "params": 302632,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            0.7222222222222222
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 29,
+        "nuclear_norm": 1149.3435138082132,
+        "accuracy": 67.52,
+        "flops_m": 162.829132,
+        "params": 821164,
+        "width_multipliers": [
+            0.7777777777777778,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 30,
+        "nuclear_norm": 738.2281932975166,
+        "accuracy": 66.96,
+        "flops_m": 93.321284,
+        "params": 532040,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            0.8888888888888888
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 31,
+        "nuclear_norm": 1846.588345262222,
+        "accuracy": 69.83,
+        "flops_m": 189.014372,
+        "params": 1531339,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.8888888888888888,
+            1.0
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 32,
+        "nuclear_norm": 593.4392139529809,
+        "accuracy": 62.23,
+        "flops_m": 77.615076,
+        "params": 351519,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.6111111111111112,
+            0.5
+        ],
+        "early_exit": 47
+    },
+    {
+        "config_idx": 33,
+        "nuclear_norm": 1168.183655753266,
+        "accuracy": 68.13,
+        "flops_m": 112.911768,
+        "params": 889572,
+        "width_multipliers": [
+            0.5,
+            0.7222222222222222,
+            0.8333333333333333
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 34,
+        "nuclear_norm": 564.7052412177436,
+        "accuracy": 62.75,
+        "flops_m": 79.480036,
+        "params": 353688,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 35,
+        "nuclear_norm": 1007.6010850612074,
+        "accuracy": 68.15,
+        "flops_m": 187.054436,
+        "params": 757807,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            1.0
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 36,
+        "nuclear_norm": 700.6507577169687,
+        "accuracy": 64.8,
+        "flops_m": 120.998032,
+        "params": 488346,
+        "width_multipliers": [
+            0.6111111111111112,
+            1.0,
+            0.5555555555555556
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 37,
+        "nuclear_norm": 328.2941477969289,
+        "accuracy": 58.59,
+        "flops_m": 108.356836,
+        "params": 173616,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.5
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 38,
+        "nuclear_norm": 711.1558380271308,
+        "accuracy": 67.7,
+        "flops_m": 99.392868,
+        "params": 514328,
+        "width_multipliers": [
+            0.5,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 39,
+        "nuclear_norm": 376.8813698962331,
+        "accuracy": 61.54,
+        "flops_m": 129.296524,
+        "params": 248360,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            0.6666666666666666
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 40,
+        "nuclear_norm": 435.5810859873891,
+        "accuracy": 63.54,
+        "flops_m": 146.500836,
+        "params": 312528,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.5
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 41,
+        "nuclear_norm": 1563.6484086131677,
+        "accuracy": 68.08,
+        "flops_m": 175.368216,
+        "params": 1216481,
+        "width_multipliers": [
+            0.6666666666666666,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 42,
+        "nuclear_norm": 766.1331660365686,
+        "accuracy": 66.79,
+        "flops_m": 95.122532,
+        "params": 569759,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.6111111111111112,
+            1.0
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 43,
+        "nuclear_norm": 265.7802055552602,
+        "accuracy": 52.93,
+        "flops_m": 102.684324,
+        "params": 147920,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 44,
+        "nuclear_norm": 515.2243161345832,
+        "accuracy": 65.5,
+        "flops_m": 94.062948,
+        "params": 327984,
+        "width_multipliers": [
+            0.5,
+            0.8888888888888888,
+            1.0
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 45,
+        "nuclear_norm": 629.7670596316457,
+        "accuracy": 66.34,
+        "flops_m": 125.819928,
+        "params": 406119,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.8333333333333333
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 46,
+        "nuclear_norm": 799.2239993289113,
+        "accuracy": 67.66,
+        "flops_m": 135.548184,
+        "params": 558441,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.8333333333333333
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 47,
+        "nuclear_norm": 219.21682859910652,
+        "accuracy": 55.77,
+        "flops_m": 51.822744,
+        "params": 135616,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.6666666666666666,
+            0.6666666666666666
+        ],
+        "early_exit": 32
+    },
+    {
+        "config_idx": 48,
+        "nuclear_norm": 226.32412888063118,
+        "accuracy": 58.74,
+        "flops_m": 44.580316,
+        "params": 111364,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.7222222222222222
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 49,
+        "nuclear_norm": 240.77827216638252,
+        "accuracy": 57.59,
+        "flops_m": 58.261956,
+        "params": 159592,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 50,
+        "nuclear_norm": 757.1131861880422,
+        "accuracy": 66.44,
+        "flops_m": 135.064788,
+        "params": 536504,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 51,
+        "nuclear_norm": 345.2096249787137,
+        "accuracy": 62.22,
+        "flops_m": 96.23882,
+        "params": 248123,
+        "width_multipliers": [
+            0.7222222222222222,
+            1.0,
+            0.9444444444444444
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 52,
+        "nuclear_norm": 456.7802065089345,
+        "accuracy": 63.43,
+        "flops_m": 151.235812,
+        "params": 331088,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 53,
+        "nuclear_norm": 198.33364178193733,
+        "accuracy": 50.42,
+        "flops_m": 42.882724,
+        "params": 102312,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 35
+    },
+    {
+        "config_idx": 54,
+        "nuclear_norm": 579.1284676324576,
+        "accuracy": 66.85,
+        "flops_m": 144.177364,
+        "params": 402557,
+        "width_multipliers": [
+            0.8333333333333333,
+            1.0,
+            0.9444444444444444
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 55,
+        "nuclear_norm": 882.9438438559882,
+        "accuracy": 65.2,
+        "flops_m": 90.3972,
+        "params": 566046,
+        "width_multipliers": [
+            0.5,
+            0.7222222222222222,
+            0.5555555555555556
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 56,
+        "nuclear_norm": 242.74265882652253,
+        "accuracy": 51.57,
+        "flops_m": 62.113444,
+        "params": 121563,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 35
+    },
+    {
+        "config_idx": 57,
+        "nuclear_norm": 280.38147728331387,
+        "accuracy": 59.2,
+        "flops_m": 70.311052,
+        "params": 189133,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 58,
+        "nuclear_norm": 265.82541252626106,
+        "accuracy": 59.71,
+        "flops_m": 46.37294,
+        "params": 127496,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 59,
+        "nuclear_norm": 893.4508546208963,
+        "accuracy": 65.27,
+        "flops_m": 124.184804,
+        "params": 561980,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.8333333333333333,
+            0.5
+        ],
+        "early_exit": 52
+    },
+    {
+        "config_idx": 60,
+        "nuclear_norm": 850.7239004932344,
+        "accuracy": 65.84,
+        "flops_m": 115.256396,
+        "params": 554870,
+        "width_multipliers": [
+            0.8888888888888888,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 61,
+        "nuclear_norm": 178.09660025592893,
+        "accuracy": 49.97,
+        "flops_m": 49.100452,
+        "params": 91138,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.5,
+            1.0
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 62,
+        "nuclear_norm": 198.33364178193733,
+        "accuracy": 50.99,
+        "flops_m": 42.882724,
+        "params": 102312,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.7222222222222222
+        ],
+        "early_exit": 35
+    },
+    {
+        "config_idx": 63,
+        "nuclear_norm": 1055.5814088527113,
+        "accuracy": 67.71,
+        "flops_m": 188.04026,
+        "params": 790655,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            0.8888888888888888
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 64,
+        "nuclear_norm": 369.0948999072425,
+        "accuracy": 63.47,
+        "flops_m": 53.892308,
+        "params": 212048,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 65,
+        "nuclear_norm": 882.0784236751497,
+        "accuracy": 66.69,
+        "flops_m": 165.706528,
+        "params": 613467,
+        "width_multipliers": [
+            0.8888888888888888,
+            1.0,
+            0.6111111111111112
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 66,
+        "nuclear_norm": 1068.25638349168,
+        "accuracy": 69.26,
+        "flops_m": 128.547172,
+        "params": 853317,
+        "width_multipliers": [
+            0.8333333333333333,
+            0.5,
+            1.0
+        ],
+        "early_exit": 46
+    },
+    {
+        "config_idx": 67,
+        "nuclear_norm": 736.1264900779352,
+        "accuracy": 67.49,
+        "flops_m": 89.1649,
+        "params": 545451,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.5555555555555556,
+            1.0
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 68,
+        "nuclear_norm": 624.2146725798957,
+        "accuracy": 64.12,
+        "flops_m": 112.379024,
+        "params": 438037,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.5555555555555556
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 69,
+        "nuclear_norm": 454.1078839446418,
+        "accuracy": 61.9,
+        "flops_m": 60.707812,
+        "params": 265033,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.6111111111111112,
+            0.5
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 70,
+        "nuclear_norm": 316.801072135102,
+        "accuracy": 61.21,
+        "flops_m": 78.585372,
+        "params": 236224,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            1.0
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 71,
+        "nuclear_norm": 390.78967749513686,
+        "accuracy": 60.61,
+        "flops_m": 120.566212,
+        "params": 245535,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 72,
+        "nuclear_norm": 365.7128300811164,
+        "accuracy": 63.47,
+        "flops_m": 91.090148,
+        "params": 284072,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.5555555555555556
+        ],
+        "early_exit": 32
+    },
+    {
+        "config_idx": 73,
+        "nuclear_norm": 757.4878512155265,
+        "accuracy": 65.33,
+        "flops_m": 151.329568,
+        "params": 521696,
+        "width_multipliers": [
+            0.8333333333333333,
+            1.0,
+            0.6111111111111112
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 74,
+        "nuclear_norm": 1178.1386769954115,
+        "accuracy": 69.38,
+        "flops_m": 195.27994,
+        "params": 903999,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            0.8888888888888888
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 75,
+        "nuclear_norm": 450.19103480828926,
+        "accuracy": 63.07,
+        "flops_m": 105.295076,
+        "params": 339752,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 35
+    },
+    {
+        "config_idx": 76,
+        "nuclear_norm": 1127.9283278658986,
+        "accuracy": 65.87,
+        "flops_m": 150.912392,
+        "params": 806483,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 51
+    },
+    {
+        "config_idx": 77,
+        "nuclear_norm": 952.9798105433583,
+        "accuracy": 66.44,
+        "flops_m": 165.9403,
+        "params": 649832,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            0.6666666666666666
+        ],
+        "early_exit": 47
+    },
+    {
+        "config_idx": 78,
+        "nuclear_norm": 964.0843652104959,
+        "accuracy": 66.67,
+        "flops_m": 145.058848,
+        "params": 665685,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.9444444444444444,
+            0.6111111111111112
+        ],
+        "early_exit": 48
+    },
+    {
+        "config_idx": 79,
+        "nuclear_norm": 1092.3533611441962,
+        "accuracy": 69.06,
+        "flops_m": 136.645988,
+        "params": 884000,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            1.0
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 80,
+        "nuclear_norm": 609.0767625188455,
+        "accuracy": 64.32,
+        "flops_m": 136.037604,
+        "params": 414844,
+        "width_multipliers": [
+            0.7777777777777778,
+            1.0,
+            0.5
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 81,
+        "nuclear_norm": 616.4392223502509,
+        "accuracy": 65.12,
+        "flops_m": 103.691152,
+        "params": 420159,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            0.5555555555555556
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 82,
+        "nuclear_norm": 140.9818091536872,
+        "accuracy": 49.66,
+        "flops_m": 35.755684,
+        "params": 74280,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.8333333333333333
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 83,
+        "nuclear_norm": 320.8159690047614,
+        "accuracy": 61.57,
+        "flops_m": 81.620196,
+        "params": 246952,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            1.0
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 84,
+        "nuclear_norm": 467.3151758527383,
+        "accuracy": 61.71,
+        "flops_m": 79.058148,
+        "params": 257500,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.5,
+            0.5
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 85,
+        "nuclear_norm": 1136.1459031249397,
+        "accuracy": 65.99,
+        "flops_m": 137.734732,
+        "params": 825480,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.6666666666666666
+        ],
+        "early_exit": 51
+    },
+    {
+        "config_idx": 86,
+        "nuclear_norm": 856.6644091750495,
+        "accuracy": 65.73,
+        "flops_m": 121.926884,
+        "params": 591400,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.5
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 87,
+        "nuclear_norm": 541.7080138400197,
+        "accuracy": 64.02,
+        "flops_m": 119.075916,
+        "params": 319472,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 88,
+        "nuclear_norm": 953.6785526946187,
+        "accuracy": 66.26,
+        "flops_m": 150.679628,
+        "params": 636377,
+        "width_multipliers": [
+            1.0,
+            0.6666666666666666,
+            0.6666666666666666
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 89,
+        "nuclear_norm": 458.5201349402778,
+        "accuracy": 64.7,
+        "flops_m": 83.417156,
+        "params": 281608,
+        "width_multipliers": [
+            0.5,
+            0.8333333333333333,
+            0.8888888888888888
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 90,
+        "nuclear_norm": 903.0915727759711,
+        "accuracy": 67.38,
+        "flops_m": 105.367908,
+        "params": 703192,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 91,
+        "nuclear_norm": 315.6090758983046,
+        "accuracy": 57.99,
+        "flops_m": 97.965284,
+        "params": 163311,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.5,
+            0.5
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 92,
+        "nuclear_norm": 787.8923123693094,
+        "accuracy": 65.39,
+        "flops_m": 101.19994,
+        "params": 565836,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.5,
+            0.8888888888888888
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 93,
+        "nuclear_norm": 298.606464877259,
+        "accuracy": 60.94,
+        "flops_m": 76.88522,
+        "params": 228392,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.6111111111111112
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 94,
+        "nuclear_norm": 534.1126526072621,
+        "accuracy": 64.4,
+        "flops_m": 165.44074,
+        "params": 386768,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.7222222222222222
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 95,
+        "nuclear_norm": 306.22829700959846,
+        "accuracy": 62.69,
+        "flops_m": 50.637156,
+        "params": 152136,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.5,
+            1.0
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 96,
+        "nuclear_norm": 1691.3134194146842,
+        "accuracy": 69.39,
+        "flops_m": 210.721124,
+        "params": 1404677,
+        "width_multipliers": [
+            0.8333333333333333,
+            1.0,
+            1.0
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 97,
+        "nuclear_norm": 579.7666276637465,
+        "accuracy": 65.64,
+        "flops_m": 113.913924,
+        "params": 366175,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.5,
+            0.8888888888888888
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 98,
+        "nuclear_norm": 361.9819975043647,
+        "accuracy": 61.54,
+        "flops_m": 86.910492,
+        "params": 268864,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            0.6111111111111112
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 99,
+        "nuclear_norm": 333.89087279792875,
+        "accuracy": 57.41,
+        "flops_m": 89.698144,
+        "params": 204544,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.7222222222222222,
+            1.0
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 100,
+        "nuclear_norm": 1325.712403126061,
+        "accuracy": 69.06,
+        "flops_m": 188.991844,
+        "params": 1064064,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 47
+    },
+    {
+        "config_idx": 101,
+        "nuclear_norm": 825.3790559913032,
+        "accuracy": 68.27,
+        "flops_m": 100.641124,
+        "params": 629208,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 102,
+        "nuclear_norm": 1201.9644516184926,
+        "accuracy": 68.91,
+        "flops_m": 187.784548,
+        "params": 949344,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 103,
+        "nuclear_norm": 183.2874900912866,
+        "accuracy": 53.08,
+        "flops_m": 51.899856,
+        "params": 101126,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.6111111111111112,
+            0.5
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 104,
+        "nuclear_norm": 493.15241372026503,
+        "accuracy": 64.01,
+        "flops_m": 150.273252,
+        "params": 357743,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            0.5
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 105,
+        "nuclear_norm": 374.1298602297902,
+        "accuracy": 60.85,
+        "flops_m": 110.9259,
+        "params": 191792,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 106,
+        "nuclear_norm": 193.79410049598664,
+        "accuracy": 50.4,
+        "flops_m": 56.174244,
+        "params": 98203,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 107,
+        "nuclear_norm": 786.0103777125478,
+        "accuracy": 67.69,
+        "flops_m": 183.306596,
+        "params": 546320,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            1.0
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 108,
+        "nuclear_norm": 765.346708312165,
+        "accuracy": 64.61,
+        "flops_m": 77.422412,
+        "params": 513413,
+        "width_multipliers": [
+            0.5,
+            0.6111111111111112,
+            0.6666666666666666
+        ],
+        "early_exit": 48
+    },
+    {
+        "config_idx": 109,
+        "nuclear_norm": 373.19438927061856,
+        "accuracy": 60.95,
+        "flops_m": 55.469284,
+        "params": 199185,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.5,
+            0.5
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 110,
+        "nuclear_norm": 526.4088610876352,
+        "accuracy": 65.84,
+        "flops_m": 114.760036,
+        "params": 373521,
+        "width_multipliers": [
+            0.6111111111111112,
+            1.0,
+            1.0
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 111,
+        "nuclear_norm": 149.38508345140144,
+        "accuracy": 49.73,
+        "flops_m": 36.943524,
+        "params": 78952,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 112,
+        "nuclear_norm": 595.9637735560536,
+        "accuracy": 63.4,
+        "flops_m": 140.645604,
+        "params": 362944,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 113,
+        "nuclear_norm": 587.5518234446645,
+        "accuracy": 65.8,
+        "flops_m": 149.970276,
+        "params": 357472,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 114,
+        "nuclear_norm": 1212.7791460230947,
+        "accuracy": 67.65,
+        "flops_m": 186.875868,
+        "params": 867808,
+        "width_multipliers": [
+            1.0,
+            0.8888888888888888,
+            0.7222222222222222
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 115,
+        "nuclear_norm": 1073.5807595397346,
+        "accuracy": 68.45,
+        "flops_m": 141.842644,
+        "params": 856272,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.9444444444444444
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 116,
+        "nuclear_norm": 490.2340002786368,
+        "accuracy": 63.53,
+        "flops_m": 136.13386,
+        "params": 357317,
+        "width_multipliers": [
+            0.8333333333333333,
+            1.0,
+            0.5
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 117,
+        "nuclear_norm": 617.9541834071279,
+        "accuracy": 64.56,
+        "flops_m": 141.968016,
+        "params": 380011,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            0.5555555555555556
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 118,
+        "nuclear_norm": 503.76169522758573,
+        "accuracy": 64.77,
+        "flops_m": 90.438296,
+        "params": 302486,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.6111111111111112,
+            0.8333333333333333
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 119,
+        "nuclear_norm": 1528.855536289513,
+        "accuracy": 68.65,
+        "flops_m": 199.442712,
+        "params": 1155347,
+        "width_multipliers": [
+            1.0,
+            0.8333333333333333,
+            0.8333333333333333
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 120,
+        "nuclear_norm": 860.2405639421195,
+        "accuracy": 66.75,
+        "flops_m": 113.220676,
+        "params": 630869,
+        "width_multipliers": [
+            0.8333333333333333,
+            0.5,
+            0.8888888888888888
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 121,
+        "nuclear_norm": 781.3904299880378,
+        "accuracy": 64.81,
+        "flops_m": 102.37258,
+        "params": 513904,
+        "width_multipliers": [
+            0.5,
+            0.8888888888888888,
+            0.5
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 122,
+        "nuclear_norm": 277.6085858489387,
+        "accuracy": 61.67,
+        "flops_m": 72.150244,
+        "params": 209832,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            1.0
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 123,
+        "nuclear_norm": 424.77171166893095,
+        "accuracy": 63.22,
+        "flops_m": 118.222052,
+        "params": 311676,
+        "width_multipliers": [
+            0.7777777777777778,
+            1.0,
+            0.5
+        ],
+        "early_exit": 32
+    },
+    {
+        "config_idx": 124,
+        "nuclear_norm": 738.0412637805566,
+        "accuracy": 63.27,
+        "flops_m": 97.596644,
+        "params": 458834,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 125,
+        "nuclear_norm": 284.3753588870168,
+        "accuracy": 54.98,
+        "flops_m": 107.6884,
+        "params": 166564,
+        "width_multipliers": [
+            1.0,
+            0.6111111111111112,
+            0.6666666666666666
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 126,
+        "nuclear_norm": 577.9287324096076,
+        "accuracy": 64.06,
+        "flops_m": 110.089444,
+        "params": 405800,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            0.5
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 127,
+        "nuclear_norm": 233.9439618731849,
+        "accuracy": 60.37,
+        "flops_m": 45.910372,
+        "params": 113992,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.5,
+            1.0
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 128,
+        "nuclear_norm": 274.8339510108344,
+        "accuracy": 58.22,
+        "flops_m": 63.594948,
+        "params": 180520,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 129,
+        "nuclear_norm": 266.01351983100176,
+        "accuracy": 53.37,
+        "flops_m": 103.445256,
+        "params": 150588,
+        "width_multipliers": [
+            1.0,
+            0.5555555555555556,
+            0.9444444444444444
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 130,
+        "nuclear_norm": 707.2784435893409,
+        "accuracy": 64.65,
+        "flops_m": 67.007264,
+        "params": 455219,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.6111111111111112
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 131,
+        "nuclear_norm": 978.8092446471564,
+        "accuracy": 63.71,
+        "flops_m": 126.66186,
+        "params": 665640,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.5
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 132,
+        "nuclear_norm": 1781.5570431426167,
+        "accuracy": 68.4,
+        "flops_m": 206.19274,
+        "params": 1462821,
+        "width_multipliers": [
+            1.0,
+            0.6666666666666666,
+            1.0
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 133,
+        "nuclear_norm": 328.67185564991087,
+        "accuracy": 62.34,
+        "flops_m": 89.124068,
+        "params": 240898,
+        "width_multipliers": [
+            0.6666666666666666,
+            1.0,
+            1.0
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 134,
+        "nuclear_norm": 776.9834998790175,
+        "accuracy": 64.63,
+        "flops_m": 138.51978,
+        "params": 482479,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.7777777777777778,
+            0.5
+        ],
+        "early_exit": 48
+    },
+    {
+        "config_idx": 135,
+        "nuclear_norm": 262.1629621712491,
+        "accuracy": 59.03,
+        "flops_m": 74.461324,
+        "params": 165999,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.8333333333333333,
+            0.5
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 136,
+        "nuclear_norm": 426.6025426532142,
+        "accuracy": 63.2,
+        "flops_m": 65.649228,
+        "params": 252481,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.6666666666666666,
+            0.6666666666666666
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 137,
+        "nuclear_norm": 370.8239258006215,
+        "accuracy": 62.09,
+        "flops_m": 130.937372,
+        "params": 252680,
+        "width_multipliers": [
+            1.0,
+            0.9444444444444444,
+            0.6666666666666666
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 138,
+        "nuclear_norm": 232.0456986571662,
+        "accuracy": 58.83,
+        "flops_m": 58.282124,
+        "params": 158720,
+        "width_multipliers": [
+            0.5,
+            0.8333333333333333,
+            0.5
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 139,
+        "nuclear_norm": 1452.3388924743049,
+        "accuracy": 69.61,
+        "flops_m": 165.693796,
+        "params": 1220584,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            1.0
+        ],
+        "early_exit": 48
+    },
+    {
+        "config_idx": 140,
+        "nuclear_norm": 894.2105159903876,
+        "accuracy": 67.88,
+        "flops_m": 123.397332,
+        "params": 685624,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            0.9444444444444444
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 141,
+        "nuclear_norm": 161.8479489898309,
+        "accuracy": 48.73,
+        "flops_m": 46.724772,
+        "params": 81794,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.5,
+            0.6666666666666666
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 142,
+        "nuclear_norm": 298.606464877259,
+        "accuracy": 61.81,
+        "flops_m": 76.88522,
+        "params": 228392,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            0.5
+        ],
+        "early_exit": 29
+    },
+    {
+        "config_idx": 143,
+        "nuclear_norm": 1091.0615499690175,
+        "accuracy": 69.54,
+        "flops_m": 187.222372,
+        "params": 837144,
+        "width_multipliers": [
+            1.0,
+            0.8888888888888888,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 144,
+        "nuclear_norm": 277.6085858489387,
+        "accuracy": 61.42,
+        "flops_m": 72.150244,
+        "params": 209832,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            1.0
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 145,
+        "nuclear_norm": 746.174522891175,
+        "accuracy": 67.23,
+        "flops_m": 120.973592,
+        "params": 543913,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 146,
+        "nuclear_norm": 454.1078839446418,
+        "accuracy": 62.03,
+        "flops_m": 60.707812,
+        "params": 265033,
+        "width_multipliers": [
+            0.5,
+            0.6111111111111112,
+            0.5
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 147,
+        "nuclear_norm": 437.29960472136736,
+        "accuracy": 62.66,
+        "flops_m": 114.87348,
+        "params": 242101,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 38
+    },
+    {
+        "config_idx": 148,
+        "nuclear_norm": 351.82062274962664,
+        "accuracy": 59.77,
+        "flops_m": 122.978756,
+        "params": 224528,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            0.7777777777777778
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 149,
+        "nuclear_norm": 1238.1243912791833,
+        "accuracy": 69.94,
+        "flops_m": 163.752292,
+        "params": 1011138,
+        "width_multipliers": [
+            0.6666666666666666,
+            1.0,
+            1.0
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 150,
+        "nuclear_norm": 1001.178668751847,
+        "accuracy": 67.72,
+        "flops_m": 91.286228,
+        "params": 797408,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 47
+    },
+    {
+        "config_idx": 151,
+        "nuclear_norm": 297.81053859740496,
+        "accuracy": 58.13,
+        "flops_m": 112.658272,
+        "params": 184472,
+        "width_multipliers": [
+            1.0,
+            0.7222222222222222,
+            0.6111111111111112
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 152,
+        "nuclear_norm": 272.5697778929025,
+        "accuracy": 60.45,
+        "flops_m": 71.88022,
+        "params": 193173,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.9444444444444444,
+            0.5
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 153,
+        "nuclear_norm": 1103.1083262637258,
+        "accuracy": 67.52,
+        "flops_m": 151.761944,
+        "params": 812311,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.8333333333333333
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 154,
+        "nuclear_norm": 245.0044592563063,
+        "accuracy": 52.62,
+        "flops_m": 91.104932,
+        "params": 132943,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 30
+    },
+    {
+        "config_idx": 155,
+        "nuclear_norm": 507.22107459558174,
+        "accuracy": 62.8,
+        "flops_m": 63.0753,
+        "params": 302153,
+        "width_multipliers": [
+            0.5,
+            0.6111111111111112,
+            0.5
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 156,
+        "nuclear_norm": 686.6013865615241,
+        "accuracy": 65.24,
+        "flops_m": 115.755808,
+        "params": 485571,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.6111111111111112
+        ],
+        "early_exit": 41
+    },
+    {
+        "config_idx": 157,
+        "nuclear_norm": 347.40869800932705,
+        "accuracy": 61.09,
+        "flops_m": 84.34466,
+        "params": 243145,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.8888888888888888,
+            0.5
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 158,
+        "nuclear_norm": 306.67913157492876,
+        "accuracy": 54.1,
+        "flops_m": 108.80692,
+        "params": 171668,
+        "width_multipliers": [
+            1.0,
+            0.5555555555555556,
+            0.7222222222222222
+        ],
+        "early_exit": 34
+    },
+    {
+        "config_idx": 159,
+        "nuclear_norm": 1108.8402450755239,
+        "accuracy": 66.35,
+        "flops_m": 164.994848,
+        "params": 735443,
+        "width_multipliers": [
+            1.0,
+            0.7777777777777778,
+            0.6111111111111112
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 160,
+        "nuclear_norm": 353.26025945693254,
+        "accuracy": 59.94,
+        "flops_m": 122.455904,
+        "params": 222928,
+        "width_multipliers": [
+            1.0,
+            0.7222222222222222,
+            0.5
+        ],
+        "early_exit": 32
+    },
+    {
+        "config_idx": 161,
+        "nuclear_norm": 768.1890263701789,
+        "accuracy": 64.45,
+        "flops_m": 118.375652,
+        "params": 535720,
+        "width_multipliers": [
+            0.5555555555555556,
+            1.0,
+            0.5
+        ],
+        "early_exit": 46
+    },
+    {
+        "config_idx": 162,
+        "nuclear_norm": 1518.6887663081288,
+        "accuracy": 68.74,
+        "flops_m": 221.524504,
+        "params": 1168003,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 51
+    },
+    {
+        "config_idx": 163,
+        "nuclear_norm": 1087.1917740916833,
+        "accuracy": 69.28,
+        "flops_m": 154.298724,
+        "params": 863170,
+        "width_multipliers": [
+            0.6666666666666666,
+            1.0,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 164,
+        "nuclear_norm": 572.2128391410224,
+        "accuracy": 63.46,
+        "flops_m": 76.823524,
+        "params": 356969,
+        "width_multipliers": [
+            0.5,
+            0.7222222222222222,
+            0.5
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 165,
+        "nuclear_norm": 262.04509889520705,
+        "accuracy": 53.5,
+        "flops_m": 94.39156,
+        "params": 145543,
+        "width_multipliers": [
+            0.9444444444444444,
+            0.5555555555555556,
+            0.5
+        ],
+        "early_exit": 31
+    },
+    {
+        "config_idx": 166,
+        "nuclear_norm": 555.4154129698873,
+        "accuracy": 64.41,
+        "flops_m": 131.780316,
+        "params": 333913,
+        "width_multipliers": [
+            1.0,
+            0.6666666666666666,
+            0.7222222222222222
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 167,
+        "nuclear_norm": 745.041954359971,
+        "accuracy": 65.2,
+        "flops_m": 141.956324,
+        "params": 507644,
+        "width_multipliers": [
+            0.7777777777777778,
+            1.0,
+            0.5
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 168,
+        "nuclear_norm": 259.527518525254,
+        "accuracy": 58.55,
+        "flops_m": 45.921056,
+        "params": 124811,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.6111111111111112
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 169,
+        "nuclear_norm": 942.6236608698964,
+        "accuracy": 68.28,
+        "flops_m": 181.808264,
+        "params": 672167,
+        "width_multipliers": [
+            1.0,
+            0.9444444444444444,
+            0.7777777777777778
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 170,
+        "nuclear_norm": 165.9311556960456,
+        "accuracy": 50.4,
+        "flops_m": 39.319204,
+        "params": 88296,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.8888888888888888
+        ],
+        "early_exit": 32
+    },
+    {
+        "config_idx": 171,
+        "nuclear_norm": 749.9080567504279,
+        "accuracy": 66.9,
+        "flops_m": 123.15274,
+        "params": 554728,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            1.0
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 172,
+        "nuclear_norm": 439.74330431967974,
+        "accuracy": 61.08,
+        "flops_m": 115.484944,
+        "params": 241138,
+        "width_multipliers": [
+            1.0,
+            0.5555555555555556,
+            0.5555555555555556
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 173,
+        "nuclear_norm": 245.9532854175195,
+        "accuracy": 58.43,
+        "flops_m": 67.361932,
+        "params": 158834,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 174,
+        "nuclear_norm": 798.7321008387953,
+        "accuracy": 66.2,
+        "flops_m": 171.68022,
+        "params": 552999,
+        "width_multipliers": [
+            0.9444444444444444,
+            1.0,
+            0.7222222222222222
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 175,
+        "nuclear_norm": 797.3518487773836,
+        "accuracy": 67.74,
+        "flops_m": 157.660516,
+        "params": 559254,
+        "width_multipliers": [
+            0.8888888888888888,
+            0.9444444444444444,
+            1.0
+        ],
+        "early_exit": 39
+    },
+    {
+        "config_idx": 176,
+        "nuclear_norm": 1770.3792140213773,
+        "accuracy": 68.87,
+        "flops_m": 171.927908,
+        "params": 1462523,
+        "width_multipliers": [
+            0.7222222222222222,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 53
+    },
+    {
+        "config_idx": 177,
+        "nuclear_norm": 186.25864483369514,
+        "accuracy": 51.39,
+        "flops_m": 42.893064,
+        "params": 102022,
+        "width_multipliers": [
+            0.5,
+            0.5555555555555556,
+            1.0
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 178,
+        "nuclear_norm": 903.0915727759711,
+        "accuracy": 68.33,
+        "flops_m": 105.367908,
+        "params": 703192,
+        "width_multipliers": [
+            0.5,
+            0.7777777777777778,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 179,
+        "nuclear_norm": 1016.6929760123603,
+        "accuracy": 68.81,
+        "flops_m": 131.919204,
+        "params": 810016,
+        "width_multipliers": [
+            0.5,
+            0.9444444444444444,
+            1.0
+        ],
+        "early_exit": 43
+    },
+    {
+        "config_idx": 180,
+        "nuclear_norm": 204.50005074497312,
+        "accuracy": 51.72,
+        "flops_m": 52.663972,
+        "params": 105154,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.5,
+            0.5
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 181,
+        "nuclear_norm": 332.0223691081628,
+        "accuracy": 60.8,
+        "flops_m": 83.003532,
+        "params": 220194,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.8333333333333333,
+            1.0
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 182,
+        "nuclear_norm": 720.2995546534657,
+        "accuracy": 64.36,
+        "flops_m": 176.153828,
+        "params": 489936,
+        "width_multipliers": [
+            1.0,
+            1.0,
+            0.5
+        ],
+        "early_exit": 40
+    },
+    {
+        "config_idx": 183,
+        "nuclear_norm": 1038.472748122178,
+        "accuracy": 69.04,
+        "flops_m": 164.464996,
+        "params": 804284,
+        "width_multipliers": [
+            0.7777777777777778,
+            1.0,
+            1.0
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 184,
+        "nuclear_norm": 335.9882510378957,
+        "accuracy": 59.97,
+        "flops_m": 109.329032,
+        "params": 176098,
+        "width_multipliers": [
+            1.0,
+            0.5,
+            0.7777777777777778
+        ],
+        "early_exit": 36
+    },
+    {
+        "config_idx": 185,
+        "nuclear_norm": 231.91190044768155,
+        "accuracy": 57.77,
+        "flops_m": 60.926092,
+        "params": 152317,
+        "width_multipliers": [
+            0.6111111111111112,
+            0.8333333333333333,
+            0.5
+        ],
+        "early_exit": 28
+    },
+    {
+        "config_idx": 186,
+        "nuclear_norm": 593.6463723327033,
+        "accuracy": 66.87,
+        "flops_m": 113.699172,
+        "params": 406760,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            1.0
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 187,
+        "nuclear_norm": 1204.6475340938196,
+        "accuracy": 67.82,
+        "flops_m": 126.997316,
+        "params": 925551,
+        "width_multipliers": [
+            0.6666666666666666,
+            0.7222222222222222,
+            0.8888888888888888
+        ],
+        "early_exit": 49
+    },
+    {
+        "config_idx": 188,
+        "nuclear_norm": 1020.6333672730252,
+        "accuracy": 68.38,
+        "flops_m": 153.2982,
+        "params": 766740,
+        "width_multipliers": [
+            0.7222222222222222,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 44
+    },
+    {
+        "config_idx": 189,
+        "nuclear_norm": 1463.5285473014228,
+        "accuracy": 66.44,
+        "flops_m": 125.4913,
+        "params": 1223369,
+        "width_multipliers": [
+            0.5,
+            0.6111111111111112,
+            1.0
+        ],
+        "early_exit": 51
+    },
+    {
+        "config_idx": 190,
+        "nuclear_norm": 298.5478570605628,
+        "accuracy": 62.58,
+        "flops_m": 49.737428,
+        "params": 147008,
+        "width_multipliers": [
+            0.5,
+            0.5,
+            0.9444444444444444
+        ],
+        "early_exit": 37
+    },
+    {
+        "config_idx": 191,
+        "nuclear_norm": 1638.691109023057,
+        "accuracy": 69.57,
+        "flops_m": 192.118116,
+        "params": 1355428,
+        "width_multipliers": [
+            0.7777777777777778,
+            0.9444444444444444,
+            1.0
+        ],
+        "early_exit": 50
+    },
+    {
+        "config_idx": 192,
+        "nuclear_norm": 259.8535657073371,
+        "accuracy": 57.93,
+        "flops_m": 60.208992,
+        "params": 167686,
+        "width_multipliers": [
+            0.5555555555555556,
+            0.7222222222222222,
+            1.0
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 193,
+        "nuclear_norm": 186.25864483369514,
+        "accuracy": 52.01,
+        "flops_m": 42.893064,
+        "params": 102022,
+        "width_multipliers": [
+            0.5,
+            0.5555555555555556,
+            0.5
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 194,
+        "nuclear_norm": 209.12615252984688,
+        "accuracy": 54.71,
+        "flops_m": 48.093648,
+        "params": 121750,
+        "width_multipliers": [
+            0.5,
+            0.6111111111111112,
+            1.0
+        ],
+        "early_exit": 33
+    },
+    {
+        "config_idx": 195,
+        "nuclear_norm": 814.089145489037,
+        "accuracy": 65.41,
+        "flops_m": 171.931876,
+        "params": 542568,
+        "width_multipliers": [
+            1.0,
+            0.9444444444444444,
+            0.5
+        ],
+        "early_exit": 45
+    },
+    {
+        "config_idx": 196,
+        "nuclear_norm": 459.4849660540931,
+        "accuracy": 62.78,
+        "flops_m": 66.07562,
+        "params": 272621,
+        "width_multipliers": [
+            0.5,
+            0.6666666666666666,
+            0.5
+        ],
+        "early_exit": 42
+    },
+    {
+        "config_idx": 197,
+        "nuclear_norm": 1543.3616913035512,
+        "accuracy": 68.96,
+        "flops_m": 214.599704,
+        "params": 1178189,
+        "width_multipliers": [
+            1.0,
+            0.9444444444444444,
+            0.8333333333333333
+        ],
+        "early_exit": 52
+    },
+    {
+        "config_idx": 198,
+        "nuclear_norm": 1153.5764319626614,
+        "accuracy": 67.21,
+        "flops_m": 154.438432,
+        "params": 808176,
+        "width_multipliers": [
+            0.7222222222222222,
+            1.0,
+            0.6111111111111112
+        ],
+        "early_exit": 52
+    },
+    {
+        "config_idx": 199,
+        "nuclear_norm": 503.7352395202033,
+        "accuracy": 66.01,
+        "flops_m": 108.002584,
+        "params": 364402,
+        "width_multipliers": [
+            0.5,
+            1.0,
+            0.8333333333333333
+        ],
+        "early_exit": 36
+    }
+]

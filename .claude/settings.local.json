@@ -1,8 +1,12 @@
 {
   "permissions": {
     "allow": [
-      "Bash(dir:*)",
-      "Bash(python:*)"
+      "Bash(wmic process where \"name=''python.exe''\" get processid,workingsetsize /format:csv)",
+      "Bash(python -c:*)",
+      "Bash(python plot_correlation.py:*)",
+      "Bash(timeout 15 python:*)",
+      "Bash(git checkout:*)",
+      "Bash(git add:*)"
     ],
     "deny": [],
     "ask": []

@@ -8,7 +8,133 @@ from torch.nn.utils.rnn import pad_sequence
 import torchvision.transforms as transforms
 import torchvision.datasets as tvdatasets
 import os
+import urllib.request
+import zipfile
+import shutil
+from PIL import Image
 from data_tools.sampling import *
+
+
+class TinyImageNetDataset(Dataset):
+    """Custom Dataset for TinyImageNet that properly handles validation set"""
+    def __init__(self, root_dir, train=True, transform=None):
+        self.root_dir = root_dir
+        self.train = train
+        self.transform = transform
+
+        # First create unified class mapping from training set
+        train_dir = os.path.join(root_dir, 'train')
+        self.classes = sorted([d for d in os.listdir(train_dir)
+                              if os.path.isdir(os.path.join(train_dir, d))])
+        self.class_to_idx = {cls: idx for idx, cls in enumerate(self.classes)}
+
+        if train:
+            self.data_dir = os.path.join(root_dir, 'train')
+            self._load_train_data()
+        else:
+            self.data_dir = os.path.join(root_dir, 'val')
+            self._load_val_data()
+
+    def _load_train_data(self):
+        """Load training data - organized by class folders using os.walk like FlexFL"""
+        self.images = []
+        self.targets = []  # Add targets list for compatibility
+
+        # Use os.walk to recursively find images in class_name/images/ subdirectories
+        for class_name in self.classes:
+            class_dir = os.path.join(self.data_dir, class_name)
+            if os.path.isdir(class_dir):
+                for root, _, files in sorted(os.walk(class_dir)):
+                    for fname in sorted(files):
+                        if fname.endswith('.JPEG'):
+                            img_path = os.path.join(root, fname)
+                            label = self.class_to_idx[class_name]
+                            self.images.append((img_path, label))
+                            self.targets.append(label)
+
+    def _load_val_data(self):
+        """Load validation data - requires parsing val_annotations.txt"""
+        self.images = []
+        self.targets = []  # Add targets list for compatibility
+
+        # Read validation annotations
+        val_annotations_file = os.path.join(self.data_dir, 'val_annotations.txt')
+        self.val_img_to_class = {}
+        classes_set = set()
+
+        with open(val_annotations_file, 'r') as f:
+            for line in f:
+                parts = line.strip().split('\t')
+                if len(parts) >= 2:
+                    img_name = parts[0]
+                    class_name = parts[1]
+                    self.val_img_to_class[img_name] = class_name
+                    classes_set.add(class_name)
+
+        # Validate that all validation classes exist in training set
+        missing_classes = classes_set - set(self.classes)
+        if missing_classes:
+            print(f"Warning: Validation set contains classes not in training set: {missing_classes}")
+
+        # Load image paths and labels
+        val_images_dir = os.path.join(self.data_dir, 'images')
+        for img_name in os.listdir(val_images_dir):
+            if img_name.endswith('.JPEG') and img_name in self.val_img_to_class:
+                img_path = os.path.join(val_images_dir, img_name)
+                class_name = self.val_img_to_class[img_name]
+                if class_name in self.class_to_idx:
+                    label = self.class_to_idx[class_name]
+                    self.images.append((img_path, label))
+                    self.targets.append(label)
+                else:
+                    print(f"Warning: Skipping image {img_name} with unknown class {class_name}")
+
+    def __len__(self):
+        return len(self.images)
+
+    def __getitem__(self, idx):
+        img_path, label = self.images[idx]
+
+        # Load image
+        with open(img_path, 'rb') as f:
+            image = Image.open(f).convert('RGB')
+
+        if self.transform:
+            image = self.transform(image)
+
+        return image, label
+
+
+def download_tiny_imagenet(data_root):
+    """Download and extract Tiny ImageNet dataset if not exists"""
+    tiny_imagenet_dir = os.path.join(data_root, 'tiny-imagenet-200')
+    train_dir = os.path.join(tiny_imagenet_dir, 'train')
+    val_dir = os.path.join(tiny_imagenet_dir, 'val')
+
+    # Check if already exists
+    if os.path.exists(train_dir) and os.path.exists(val_dir):
+        return tiny_imagenet_dir
+
+    print("Downloading Tiny ImageNet dataset...")
+    os.makedirs(data_root, exist_ok=True)
+
+    # Download URL
+    url = "http://cs231n.stanford.edu/tiny-imagenet-200.zip"
+    zip_path = os.path.join(data_root, "tiny-imagenet-200.zip")
+
+    # Download
+    urllib.request.urlretrieve(url, zip_path)
+    print("Download completed. Extracting...")
+
+    # Extract
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        zip_ref.extractall(data_root)
+
+    # Remove zip file
+    os.remove(zip_path)
+    print("Tiny ImageNet dataset ready!")
+
+    return tiny_imagenet_dir
 
 
 class DatasetSplit(Dataset):
@@ -24,7 +150,7 @@ class DatasetSplit(Dataset):
 
     def __getitem__(self, item):
         image, label = self.dataset[self.idxs[item]]
-        return torch.tensor(image), torch.tensor(label)
+        return image, label
 
 
 def get_datasets(args):
@@ -59,83 +185,26 @@ def get_datasets(args):
                                            transforms.ToTensor(),
                                            normalize
                                        ]))
-    elif args.data == 'imagenet':
-        # imagenet
-        traindir = os.path.join(args.data_root, 'train')
-        valdir = os.path.join(args.data_root, 'val')
-        normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
-                                         std=[0.25, 0.25, 0.25])
-        im_size = args.image_size[0]
-        train_set = tvdatasets.ImageFolder(traindir, transforms.Compose([
-            transforms.Resize(int(im_size * 9 / 8)),
-            transforms.CenterCrop(im_size),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize
-        ]))
-        test_set = tvdatasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Resize(int(im_size * 9 / 8)),
-            transforms.CenterCrop(im_size),
-            transforms.ToTensor(),
-            normalize
-        ]))
-    elif args.data == 'sst2':
-        task_to_keys = {
-            "cola": ("sentence", None),
-            "mnli": ("premise", "hypothesis"),
-            "mnli-mm": ("premise", "hypothesis"),
-            "mrpc": ("sentence1", "sentence2"),
-            "qnli": ("question", "sentence"),
-            "qqp": ("question1", "question2"),
-            "rte": ("sentence1", "sentence2"),
-            "sst2": ("sentence", None),
-            "stsb": ("sentence1", "sentence2"),
-            "wnli": ("sentence1", "sentence2"),
-        }
+    elif args.data == 'tiny_imagenet':
+        # Tiny ImageNet (200 classes, 64x64 images)
+        # Auto-download if not exists
+        tiny_imagenet_dir = download_tiny_imagenet(args.data_root)
 
-        task = "sst2"
-        model_checkpoint = "bert-base-uncased"
-        dataset = load_dataset("glue", task)
-        tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
-        sentence1_key, sentence2_key = task_to_keys[task]
+        # 训练集（有数据增强）
+        trans_imagenet_train = transforms.Compose([transforms.RandomCrop(64),
+                                                   transforms.RandomHorizontalFlip(),
+                                                   transforms.ToTensor(),
+                                                   transforms.Normalize(mean=[0.4802, 0.4481, 0.3975],
+                                                                        std=[0.2770, 0.2691, 0.2821])])
 
-        def preprocess_function(examples):
-            if sentence2_key is None:
-                return tokenizer(examples[sentence1_key], truncation=True)
-            return tokenizer(examples[sentence1_key], examples[sentence2_key], truncation=True)
+        # 验证集（无数据增强）
+        trans_imagenet_val = transforms.Compose([transforms.ToTensor(),
+                                                 transforms.Normalize(mean=[0.4802, 0.4481, 0.3975],
+                                                                      std=[0.2770, 0.2691, 0.2821])])
 
-        sentence1_key, sentence2_key = task_to_keys[task]
-
-        encoded_dataset = dataset.map(preprocess_function, batched=True)
-        train_set = encoded_dataset['train']
-        val_set = encoded_dataset['validation']
-        test_set = encoded_dataset['test']
-        test_df = pd.read_csv('datasets/sst2/test.tsv', header=None, sep='\t')
-        synch_list = [test_set['sentence'].index(s.lower().replace('-lrb-', '(').replace('-rrb-', ')'))
-                      for s in test_df.iloc[:, 0].tolist()]
-        synch_list = [synch_list.index(i) for i in range(len(synch_list))]
-        new_labels = [test_df.iloc[:, -1].tolist()[x] for x in synch_list]
-
-        def change_label(data, idx):
-            data['label'] = new_labels[idx]
-            return data
-
-        test_set = test_set.map(change_label, with_indices=True)
-
-    elif args.data == 'ag_news':
-        model_checkpoint = "bert-base-uncased"
-        dataset = load_dataset(args.data)
-        tokenizer = AutoTokenizer.from_pretrained(model_checkpoint, use_fast=True)
-        sentence1_key, sentence2_key = 'text', None
-
-        def preprocess_function(examples):
-            if sentence2_key is None:
-                return tokenizer(examples[sentence1_key], truncation=True)
-            return tokenizer(examples[sentence1_key], examples[sentence2_key], truncation=True)
-
-        encoded_dataset = dataset.map(preprocess_function, batched=True)
-        train_set = encoded_dataset['train']
-        test_set = encoded_dataset['test']
+        # 使用自定义数据集类正确处理 TinyImageNet
+        train_set = TinyImageNetDataset(tiny_imagenet_dir, train=True, transform=trans_imagenet_train)
+        test_set = TinyImageNetDataset(tiny_imagenet_dir, train=False, transform=trans_imagenet_val)
     else:
         raise NotImplementedError
 
@@ -160,11 +229,7 @@ def get_dataloaders(args, batch_size, dataset):
                 torch.save(train_set_index, os.path.join(args.save_path, 'index.pth'))
             if args.data.startswith('cifar'):
                 num_sample_valid = 0
-            elif args.data == 'imagenet':
-                num_sample_valid = 0
-            elif args.data == 'sst2':
-                num_sample_valid = 872
-            elif args.data == 'ag_news':
+            elif args.data == 'tiny_imagenet':
                 num_sample_valid = 0
             else:
                 raise NotImplementedError

@@ -111,15 +111,17 @@ def accuracy(output, target, topk=(1,)):
     return res
 
 
-def adjust_learning_rate(optimizer, epoch, params):
+def adjust_learning_rate(optimizer, round_idx, params):
     if params['lr_type'] == 'multistep':
         lr, decay_rate = params['lr'], params['decay_rate']
-        if epoch >= params['decay_epochs'][1]:
+        if round_idx >= params['decay_epochs'][1]:
             lr *= decay_rate ** 2
-        elif epoch >= params['decay_epochs'][0]:
+        elif round_idx >= params['decay_epochs'][0]:
             lr *= decay_rate
     elif params['lr_type'] == 'exp':
-        lr = params['lr'] * (np.power(params['decay_rate'], epoch))
+        # Exponential decay based on round number: current_lr = initial_lr × (decay_rate ^ round_number)
+        decay_rate = params.get('decay_rate', 0.998)
+        lr = params['lr'] * (decay_rate ** round_idx)
     else:
         lr = params['lr']
     optimizer.param_groups[0]['lr'] = lr

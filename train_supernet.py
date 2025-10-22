@@ -6,6 +6,8 @@ import argparse
 import os
 
 from models.searchable_resnet import SearchableResNet
+from models.searchable_vgg import searchable_vgg16
+from models.searchable_mobilenet import searchable_mobilenet_v2
 from data_tools.dataloader import get_dataloaders, get_datasets
 from args import arg_parser, modify_args
 
@@ -32,15 +34,30 @@ def train_supernet(args):
     batch_size = getattr(args, 'supernet_batch_size', args.batch_size if hasattr(args, 'batch_size') else 128)
     train_loader, _, _ = get_dataloaders(args, batch_size, (train_set, val_set, test_set))
 
-    # 2. Define the Supernet instance.
-    # We instantiate the largest possible network by using the full number of blocks
-    # and setting the width scale for all stages to the maximum (1.0).
-    print("--> Initializing Supernet model (SearchableResNet)...")
-    supernet = SearchableResNet(
-        num_blocks=[18, 18, 18],  # Max blocks for resnet110
-        num_classes=args.num_classes,
-        width_multipliers=[1.0, 1.0, 1.0] # Max width for all stages
-    ).to(device)
+    # 2. Define the Supernet instance based on model type
+    model_type = getattr(args, 'model', 'resnet').lower()
+    print(f"--> Initializing Supernet model ({model_type})...")
+
+    if model_type == 'resnet':
+        supernet = SearchableResNet(
+            num_blocks=[18, 18, 18],  # Max blocks for resnet110
+            num_classes=args.num_classes,
+            width_multipliers=[1.0, 1.0, 1.0]  # Max width for all stages
+        ).to(device)
+    elif model_type == 'vgg':
+        supernet = searchable_vgg16(
+            num_classes=args.num_classes,
+            width_multipliers=[1.0] * 15,  # Max width for all 15 layers (13 conv + 2 fc)
+            num_channels=3
+        ).to(device)
+    elif model_type == 'mobilenet':
+        supernet = searchable_mobilenet_v2(
+            num_classes=args.num_classes,
+            width_multipliers=[1.0] * 10,  # Max width for all 10 stages [32,16,24,32,64,96,160,160,160,320]
+            num_channels=3
+        ).to(device)
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet'")
     
     # 3. Define optimizer, scheduler, and loss function
     optimizer = optim.SGD(supernet.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)

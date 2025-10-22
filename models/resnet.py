@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 from args import arg_parser, modify_args
 from models.model_utils import Scaler, conv3x3
-from hierarchical_model_selector import find_best_config_for_distribution, load_configs_from_json
+from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json
 
 class Classifier(nn.Module):
     def __init__(self, in_planes, num_classes, num_conv_layers=3, reduction=1, scale=1.):
@@ -125,8 +125,14 @@ class ResNet(nn.Module):
         del self.stored_inp_kwargs['__class__']
         args = arg_parser.parse_args()
         args = modify_args(args)
-        config_library_path = args.config_library_path or "brute_force_results.json"
-        all_model_configs = load_configs_from_json(config_library_path)
+        # Use auto-generated config library path if not specified
+        if args.config_library_path is None:
+            model_name = getattr(args, 'model', 'resnet')
+            dataset_name = getattr(args, 'data', 'cifar100')
+            config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
+        else:
+            config_library_path = args.config_library_path
+        all_model_configs = load_configs_from_json(config_library_path, model_type="resnet", dataset=getattr(args, 'data', None))
         flops_constraints = None
         if args.flops_constraints:
             flops_constraints = {i: val for i, val in enumerate(args.flops_constraints)}
@@ -135,20 +141,38 @@ class ResNet(nn.Module):
         if args.params_constraints:
             params_constraints = {i: val for i, val in enumerate(args.params_constraints)}
         
-        best_configs_for_round = find_best_config_for_distribution(
+        # Choose selection method based on args
+        if args.independent_selection:
+            # Independent selection: each level maximizes nuclear norm independently
+            best_configs_for_round = find_best_config_independent(
+                all_model_configs,
+                participating_levels,
+                flops_constraints=flops_constraints,
+                params_constraints=params_constraints
+            )
+        else:
+            # Hierarchical selection: maintains sub-model relationships
+            best_configs_for_round = find_best_config_for_distribution(
                 all_model_configs,
                 participating_levels,
                 beam_width=500,
                 flops_constraints=flops_constraints,
                 params_constraints=params_constraints
             )
-        ee_loc_list = [config['early_exit_location'] for config in best_configs_for_round.values()]
-        wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][0]
+        if best_configs_for_round is None:
+            print("Warning: No valid hierarchical configuration found. Using default ResNet configuration.")
+            # Use default configuration
+            ee_loc_list = [3] * (len(participating_levels) - 1) if len(participating_levels) > 1 else []
+            wide_scales = [1.0] * 4  # Default 4-element multipliers for ResNet stages
+        else:
+            ee_loc_list = []
+            for level in sorted(best_configs_for_round.keys()):
+                config = best_configs_for_round[level]
+                ee_loc_list.append(config['early_exit_location'])
+            wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
         ee_loc_list=ee_loc_list[:-1]
         ee_layer_locations=ee_loc_list
-        if num_classes == 1000:
-            factor = 4
-        elif num_classes == 200:
+        if num_classes == 200:
             factor = 4
         else:
             factor = 1
@@ -172,10 +196,7 @@ class ResNet(nn.Module):
             ee_block_list.append(b)
             ee_layer_list.append(l)
 
-        if self.num_classes > 100:
-            self.conv1 = nn.Conv2d(3, self.in_planes, kernel_size=5, stride=2, padding=3, bias=False)
-        else:
-            self.conv1 = nn.Conv2d(3, self.in_planes, kernel_size=3, stride=1, padding=1, bias=False)
+        self.conv1 = nn.Conv2d(3, self.in_planes, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm2d(self.in_planes, track_running_stats=self.trs)
 
         layer1, ee1 = self._make_layer(wide_scales[0],block, int(16 * wide_scales[0] * factor), layers[0], stride=1,
@@ -187,17 +208,8 @@ class ResNet(nn.Module):
         self.layers = nn.ModuleList([layer1, layer2, layer3])
         self.ee_classifiers = nn.ModuleList([ee1, ee2, ee3])
 
-        if self.num_classes > 100:
-            layer4, ee4 = self._make_layer(wide_scales[3],block, int(128 * wide_scales[3] * factor), layers[3], stride=2,
-                                           ee_layer_locations=[l for i, l in enumerate(ee_layer_list) if ee_block_list[i] == 3])
-            self.layers.append(layer4)
-            self.ee_classifiers.append(ee4)
-
-            num_planes = int(128 * wide_scales[3] * factor) * block.expansion
-            self.linear = nn.Linear(num_planes, num_classes)
-        else:
-            num_planes = int(64 * wide_scales[2] * factor) * block.expansion
-            self.linear = nn.Linear(num_planes, num_classes)
+        num_planes = int(64 * wide_scales[2] * factor) * block.expansion
+        self.linear = nn.Linear(num_planes, num_classes)
 
     def _make_layer(self,wide_scale, block_type, planes, num_block, stride, ee_layer_locations):
         strides = [stride] + [1] * (num_block - 1)

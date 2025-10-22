@@ -59,8 +59,32 @@ def determine_stages_to_run(args):
     return stages_to_run
 
 
+def get_default_config_library_path(args):
+    """Generate default config library path based on model and dataset"""
+    if args.config_library_path is None:
+        model_name = getattr(args, 'model', 'resnet')
+        dataset_name = getattr(args, 'data', 'cifar100')
+        args.config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
+        print(f"Auto-generated config library path: {args.config_library_path}")
+    return args.config_library_path
+
+def get_default_supernet_save_path(args):
+    """Generate default supernet save path based on model and dataset"""
+    if args.supernet_save_path == 'supernet.pth':  # Only change if using default
+        model_name = getattr(args, 'model', 'resnet')
+        dataset_name = getattr(args, 'data', 'cifar100')
+        args.supernet_save_path = f"{model_name}_{dataset_name}_supernet.pth"
+        print(f"Auto-generated supernet save path: {args.supernet_save_path}")
+    return args.supernet_save_path
+
 def validate_stage_dependencies(args, stages_to_run):
     """Validate that required files exist for requested stages"""
+    # Ensure config library path is set
+    get_default_config_library_path(args)
+
+    # Ensure supernet save path is set with model and dataset info
+    get_default_supernet_save_path(args)
+
     # Only check for supernet if stage 2 runs without stage 1
     if 2 in stages_to_run and 1 not in stages_to_run and not file_exists(args.supernet_save_path):
         raise FileNotFoundError(f"Stage 2 requires supernet file: {args.supernet_save_path}")
@@ -74,10 +98,13 @@ def run_stage1_supernet_training(args):
     print("=" * 60)
     print("STAGE 1: SUPERNET TRAINING")
     print("=" * 60)
-    
+
+    # Set default supernet save path with model and dataset info
+    get_default_supernet_save_path(args)
+
     # Import and use the existing train_supernet function
     from train_supernet import train_supernet
-    
+
     # Set save path for supernet
     original_save_path = getattr(args, 'save_path', None)
     args.save_path = args.supernet_save_path
@@ -100,7 +127,10 @@ def run_stage2_ppo_generation(args):
     print("=" * 60)
     print("STAGE 2: PPO ARCHITECTURE GENERATION")
     print("=" * 60)
-    
+
+    # Set default supernet save path with model and dataset info
+    get_default_supernet_save_path(args)
+
     print(f"Loading supernet from: {args.supernet_save_path}")
     print(f"Generating {args.num_architectures} architectures...")
     print(f"Using {args.episodes_per_batch} episodes per batch")
@@ -110,7 +140,9 @@ def run_stage2_ppo_generation(args):
             supernet_path=args.supernet_save_path,
             output_path=args.config_library_path,
             num_architectures=args.num_architectures,
-            episodes_per_batch=args.episodes_per_batch
+            episodes_per_batch=args.episodes_per_batch,
+            model_type=getattr(args, 'model', 'resnet'),
+            dataset=getattr(args, 'data', 'cifar100')
         )
         
         print(f"Successfully generated {len(configs)} unique configurations")
@@ -182,7 +214,15 @@ def main():
     if args.ee_locs:
         config.model_params[args.data][args.arch]['ee_layer_locations'] = args.ee_locs
 
-    model = getattr(models, args.arch)([0,1,2,3],args, {**config.model_params[args.data][args.arch]})
+    # Determine participating levels based on available constraints
+    if args.flops_constraints:
+        participating_levels = list(range(len(args.flops_constraints)))
+    elif args.params_constraints:
+        participating_levels = list(range(len(args.params_constraints)))
+    else:
+        participating_levels = [0, 1, 2, 3]  # Default fallback
+
+    model = getattr(models, args.arch)(participating_levels, args, {**config.model_params[args.data][args.arch]})
     args.num_exits = config.model_params[args.data][args.arch]['num_blocks']
 
     if args.use_gpu:

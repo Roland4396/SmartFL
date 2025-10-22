@@ -1,0 +1,15 @@
+
+\begin{table}[t]
+\centering
+\caption{Comparison of zero-cost proxy metrics. Nuclear norm shows significantly stronger correlation with model accuracy than model size-based metrics (Params and FLOPs).}
+\label{tab:proxy_kendall_tau}
+\begin{tabular}{lcc}
+\toprule
+\textbf{Proxy Metric} & \textbf{Kendall's } $\boldsymbol{\tau}$ & \textbf{p-value} \\
+\midrule
+Nuclear Norm (Ours) & 0.7868 & $<10^{-60}$ \\
+Parameters (M)      & 0.8175 & $3.64e-66$ \\
+FLOPs (M)          & 0.5539 & $2.51e-31$ \\
+\bottomrule
+\end{tabular}
+\end{table}

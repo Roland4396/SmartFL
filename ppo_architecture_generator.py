@@ -17,9 +17,75 @@ from dataclasses import dataclass
 from tqdm import tqdm
 
 from models.searchable_resnet import SearchableResNet
+from models.searchable_vgg import searchable_vgg16
+from models.searchable_mobilenet import searchable_mobilenet_v2
 from utils.metrics import calculate_total_conv_nuclear_norm, calculate_model_size
 from utils.op_counter import measure_model
 
+
+def expand_vgg_stage_multipliers(stage_multipliers: List[float]) -> List[float]:
+    """
+    Expand 6 VGG stage multipliers to 15 layer multipliers
+    VGG-D structure: [64,64], [128,128], [256,256,256], [512,512,512], [512,512,512] + [4096,4096]
+    """
+    if len(stage_multipliers) != 6:
+        raise ValueError(f"Expected 6 stage multipliers for VGG, got {len(stage_multipliers)}")
+
+    # Expand to 13 conv layers + 2 fc layers
+    layer_multipliers = []
+
+    # Stage 0: [64, 64] - 2 layers
+    layer_multipliers.extend([stage_multipliers[0]] * 2)
+
+    # Stage 1: [128, 128] - 2 layers
+    layer_multipliers.extend([stage_multipliers[1]] * 2)
+
+    # Stage 2: [256, 256, 256] - 3 layers
+    layer_multipliers.extend([stage_multipliers[2]] * 3)
+
+    # Stage 3: [512, 512, 512] - 3 layers
+    layer_multipliers.extend([stage_multipliers[3]] * 3)
+
+    # Stage 4: [512, 512, 512] - 3 layers
+    layer_multipliers.extend([stage_multipliers[4]] * 3)
+
+    # FC stage: independent FC layers control
+    layer_multipliers.extend([stage_multipliers[5]] * 2)
+
+    return layer_multipliers
+
+def create_searchable_model(model_type: str, num_classes: int, width_multipliers: List[float], early_exit_location: int = None):
+    """Create a searchable model based on model type"""
+    model_type = model_type.lower()
+
+    if model_type == 'resnet':
+        return SearchableResNet(
+            num_blocks=[18, 18, 18],
+            num_classes=num_classes,
+            width_multipliers=width_multipliers,
+            early_exit_location=early_exit_location
+        )
+    elif model_type == 'vgg':
+        # For VGG, expand 6 stage multipliers to 15 layer multipliers
+        if len(width_multipliers) == 6:
+            expanded_multipliers = expand_vgg_stage_multipliers(width_multipliers)
+        else:
+            expanded_multipliers = width_multipliers  # Already expanded
+
+        return searchable_vgg16(
+            num_classes=num_classes,
+            width_multipliers=expanded_multipliers,
+            early_exit_location=early_exit_location
+        )
+    elif model_type == 'mobilenet':
+        # MobileNetV2 uses 7 stage multipliers
+        return searchable_mobilenet_v2(
+            num_classes=num_classes,
+            width_multipliers=width_multipliers,
+            early_exit_location=early_exit_location
+        )
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet'")
 
 @dataclass
 class ArchConfig:
@@ -48,18 +114,36 @@ class ArchitectureSearchEnv(gym.Env):
     No FLOPs constraints - let hierarchical_model_selector handle filtering
     """
     
-    def __init__(self, 
+    def __init__(self,
                  supernet_state_dict: Dict,
+                 model_type: str = "resnet",
+                 num_classes: int = 100,
                  width_options: List[float] = None,
-                 exit_location_range: Tuple[int, int] = (28, 54),
-                 num_stages: int = 3):
+                 exit_location_range: Tuple[int, int] = None,
+                 num_stages: int = None):
         
         super().__init__()
-        
+
         self.supernet_state_dict = supernet_state_dict
+        self.model_type = model_type.lower()
+        self.num_classes = num_classes
         self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
-        self.exit_location_range = exit_location_range
-        self.num_stages = num_stages
+
+        # Set model-specific defaults
+        if self.model_type == "resnet":
+            self.exit_location_range = exit_location_range or (28, 54)
+            self.num_stages = num_stages or 3
+        elif self.model_type == "vgg":
+            self.exit_location_range = exit_location_range or (4, 13)  # Conv layers 4-12 (stages 2-4 complete coverage)
+            self.num_stages = num_stages or 6  # 5 conv stages + 1 FC stage: [64,64], [128,128], [256,256,256], [512,512,512], [512,512,512], [FC,FC]
+        elif self.model_type == "mobilenet":
+            self.exit_location_range = exit_location_range or (3, 8)  # Blocks 3-8 (out of 9 blocks: 0-8)
+            self.num_stages = num_stages or 8  # 8 stages: [32, 16, 24, 32, 64, 96, 160, 320]
+        else:
+            raise ValueError(f"Unsupported model type: {self.model_type}")
+
+        self.exit_location_range = self.exit_location_range
+        self.num_stages = self.num_stages
         
         # Define action and observation spaces
         self._define_spaces()
@@ -153,25 +237,25 @@ class ArchitectureSearchEnv(gym.Env):
     
     def _evaluate_architecture(self, width_multipliers: List[float], exit_location: int) -> ArchConfig:
         """Evaluate a single architecture"""
-        
+
         # Create subnet with random initialization (not pretrained weights)
-        subnet = SearchableResNet(
-            num_blocks=[18, 18, 18],
-            num_classes=100,
+        subnet = create_searchable_model(
+            model_type=self.model_type,
+            num_classes=self.num_classes,
             width_multipliers=width_multipliers,
             early_exit_location=exit_location
         )
         subnet.eval()
-        
+
         # Calculate FLOPs using op_counter (fair comparison without pretrained weights)
         cls_ops, cls_params = measure_model(subnet, H=32, W=32, exit_idx=0)
         flops_m = cls_ops[0] / 1e6 if cls_ops else 0.0
-        
+
         # For nuclear norm calculation, we still need pretrained weights
         # Create a separate subnet with pretrained weights for nuclear norm only
-        pretrained_subnet = SearchableResNet(
-            num_blocks=[18, 18, 18],
-            num_classes=100,
+        pretrained_subnet = create_searchable_model(
+            model_type=self.model_type,
+            num_classes=self.num_classes,
             width_multipliers=width_multipliers,
             early_exit_location=exit_location
         )
@@ -181,8 +265,14 @@ class ArchitectureSearchEnv(gym.Env):
         nuclear_norm = calculate_total_conv_nuclear_norm(pretrained_subnet, early_exit_location=exit_location)
         num_params = calculate_model_size(subnet, early_exit_location=exit_location)
         
+        # For VGG, ensure we save the expanded 15-element multipliers for compatibility
+        if self.model_type == "vgg" and len(width_multipliers) == 6:
+            expanded_multipliers = expand_vgg_stage_multipliers(width_multipliers)
+        else:
+            expanded_multipliers = width_multipliers
+
         return ArchConfig(
-            width_multipliers=width_multipliers,
+            width_multipliers=expanded_multipliers,
             early_exit_location=exit_location,
             flops_m=flops_m,
             total_conv_nuclear_norm=nuclear_norm,
@@ -243,12 +333,13 @@ class ArchitectureSearchEnv(gym.Env):
 class PPOArchitectureNetwork(nn.Module):
     """PPO Network for Architecture Search"""
     
-    def __init__(self, obs_dim: int, width_action_dim: int, exit_action_dim: int, hidden_dim: int = 128):
+    def __init__(self, obs_dim: int, width_action_dim: int, exit_action_dim: int, exit_location_range: Tuple[int, int], hidden_dim: int = 128):
         super().__init__()
         
         self.obs_dim = obs_dim
         self.width_action_dim = width_action_dim
         self.exit_action_dim = exit_action_dim
+        self.exit_location_range = exit_location_range
         
         # Shared feature extractor
         self.feature_extractor = nn.Sequential(
@@ -318,7 +409,9 @@ class PPOArchitectureNetwork(nn.Module):
                 min_exit, max_exit = eeloc_region
                 # Create mask for valid exit locations
                 mask = torch.full_like(exit_logits, -float('inf'))
-                mask[:, min_exit-28:max_exit-28+1] = 0  # Adjust for 0-based indexing
+                # Calculate offset based on exit_location_range start
+                offset = self.exit_location_range[0]
+                mask[:, min_exit-offset:max_exit-offset+1] = 0  # Adjust for 0-based indexing
                 constrained_logits = exit_logits + mask
                 exit_probs = F.softmax(constrained_logits / temperature, dim=-1)
             else:
@@ -370,7 +463,7 @@ class PPOArchitectureAgent:
         width_action_dim = env.num_stages
         exit_action_dim = env.exit_location_range[1] - env.exit_location_range[0]
         
-        self.network = PPOArchitectureNetwork(obs_dim, width_action_dim, exit_action_dim)
+        self.network = PPOArchitectureNetwork(obs_dim, width_action_dim, exit_action_dim, env.exit_location_range)
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
         
         # Training data storage
@@ -391,13 +484,27 @@ class PPOArchitectureAgent:
         self.decrease_rate = 0.02  # Slow additive decrease when successful
         self.increase_factor = 2.0  # Fast multiplicative increase when duplicates detected
         
-        # Region-based search strategy
+        # Region-based search strategy (model-specific)
         self.region_stats = {
-            0: {'generated': 0, 'unique': 0, 'success_rate': 0.0},  # [28, 35]
-            1: {'generated': 0, 'unique': 0, 'success_rate': 0.0},  # [36, 44] 
-            2: {'generated': 0, 'unique': 0, 'success_rate': 0.0}   # [45, 53]
+            0: {'generated': 0, 'unique': 0, 'success_rate': 0.0},
+            1: {'generated': 0, 'unique': 0, 'success_rate': 0.0},
+            2: {'generated': 0, 'unique': 0, 'success_rate': 0.0}
         }
-        self.region_boundaries = [(28, 35), (36, 44), (45, 53)]
+
+        # Set region boundaries based on model type
+        if env.model_type == "resnet":
+            # ResNet regions: early, middle, late blocks
+            self.region_boundaries = [(28, 35), (36, 44), (45, 53)]
+        elif env.model_type == "vgg":
+            # VGG regions: stage 2, stage 3, stage 4 (complete stage coverage)
+            self.region_boundaries = [(4, 6), (7, 9), (10, 12)]
+        elif env.model_type == "mobilenet":
+            # MobileNetV2 regions: early, middle, late blocks
+            self.region_boundaries = [(3, 4), (5, 6), (7, 8)]
+        else:
+            # Default to resnet boundaries
+            self.region_boundaries = [(28, 35), (36, 44), (45, 53)]
+
         self.exploration_phase_batches = 30  # First 30 batches use rotation
     
     def periodic_reset(self, batch_num):
@@ -686,10 +793,12 @@ class PPOArchitectureAgent:
         self.experiences = []
 
 
-def generate_architecture_library(supernet_path: str, 
+def generate_architecture_library(supernet_path: str,
                                 output_path: str = 'ppo_architecture_library.json',
                                 num_architectures: int = 500,
-                                episodes_per_batch: int = 200) -> List[Dict]:
+                                episodes_per_batch: int = 200,
+                                model_type: str = "resnet",
+                                dataset: str = "cifar10") -> List[Dict]:
     """
     Generate diverse architecture library using PPO search
     
@@ -718,9 +827,31 @@ def generate_architecture_library(supernet_path: str,
     
     print(f"Target architectures: {num_architectures}")
     print(f"Episodes per batch: {episodes_per_batch}")
-    
+    print(f"Model type: {model_type}")
+    print(f"Dataset: {dataset}")
+
+    # Determine number of classes based on dataset (matching args.py logic)
+    if dataset == 'cifar10':
+        num_classes = 10
+    elif dataset == 'cifar100':
+        num_classes = 100
+    elif dataset == 'imagenet':
+        num_classes = 1000
+    elif dataset == 'sst2':
+        num_classes = 2
+    elif dataset == 'ag_news':
+        num_classes = 4
+    else:
+        # Default fallback
+        print(f"⚠ Warning: Unknown dataset '{dataset}', defaulting to 100 classes")
+        num_classes = 100
+
     # Create environment and agent
-    env = ArchitectureSearchEnv(supernet_state_dict)
+    env = ArchitectureSearchEnv(
+        supernet_state_dict,
+        model_type=model_type,
+        num_classes=num_classes
+    )
     agent = PPOArchitectureAgent(env)
     
     # Share cache between agent and environment
@@ -728,19 +859,19 @@ def generate_architecture_library(supernet_path: str,
     
     all_configs = []
     seen_configs = set()  # Avoid duplicates
-    
-    # Generate architectures until we have enough unique ones
+
+    # Generate architectures for fixed number of batches
     batch = 0
-    max_batches = 1000  # Safety limit to prevent infinite loop
-    
-    while len(all_configs) < num_architectures and batch < max_batches:
+    max_batches = 1000  # Main termination condition
+
+    while batch < max_batches:
         batch += 1
         
         # Choose search region using hybrid strategy
         search_region = agent.choose_search_region(batch)
         region_bounds = agent.region_boundaries[search_region]
         
-        print(f"\n--- Batch {batch} (Target: {num_architectures}, Current: {len(all_configs)}) ---")
+        print(f"\n--- Batch {batch}/{max_batches} (Total Configs: {len(all_configs)}) ---")
         if batch <= agent.exploration_phase_batches:
             print(f"🔄 Rotation Phase: Searching eeloc region {search_region} [{region_bounds[0]}-{region_bounds[1]}]")
         else:
@@ -768,10 +899,6 @@ def generate_architecture_library(supernet_path: str,
                       f"FLOPs={config.flops_m:.1f}M, "
                       f"norm={config.total_conv_nuclear_norm:.1f}, "
                       f"params={config.num_params}")
-                
-                # Stop adding if we've reached the target
-                if len(all_configs) >= num_architectures:
-                    break
         
         # Calculate batch unique ratio for TCP-like control
         batch_unique_ratio = new_configs_count / len(batch_configs) if batch_configs else 0.0
@@ -797,20 +924,36 @@ def generate_architecture_library(supernet_path: str,
             agent.update_policy()
             print("  → Policy updated")
     
-    # Check if we reached the target
-    if len(all_configs) < num_architectures:
-        print(f"\n⚠ Warning: Only generated {len(all_configs)} unique configs out of {num_architectures} target after {max_batches} batches")
-        print("Consider increasing episodes_per_batch or adjusting PPO parameters for better diversity")
+    # Report final statistics
+    print(f"\n=== PPO Search Completed ===")
+    print(f"Completed {max_batches} batches")
+    print(f"Generated {len(all_configs)} unique configurations")
+    avg_per_batch = len(all_configs) / max_batches if max_batches > 0 else 0
+    print(f"Average {avg_per_batch:.1f} unique configs per batch")
     
+    # Add metadata to the configuration file
+    config_with_metadata = {
+        "metadata": {
+            "model_type": model_type,
+            "dataset": dataset,
+            "num_classes": num_classes,
+            "generation_timestamp": str(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
+            "total_configs": len(all_configs)
+        },
+        "configurations": all_configs
+    }
+
     # Save results
     with open(output_path, 'w') as f:
-        json.dump(all_configs, f, indent=4)
+        json.dump(config_with_metadata, f, indent=4)
     
-    print(f"\n=== Generation Complete ===")
+    print(f"\n=== Configuration Library Saved ===")
     print(f"Generated {len(all_configs)} unique architecture configurations")
+    print(f"Completed {max_batches} batches with {avg_per_batch:.1f} configs/batch")
     print(f"Saved to: {output_path}")
-    print(f"Range of FLOPs: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
-    print(f"Range of nuclear norm: {min(c['total_conv_nuclear_norm'] for c in all_configs):.1f} - {max(c['total_conv_nuclear_norm'] for c in all_configs):.1f}")
+    if all_configs:
+        print(f"Range of FLOPs: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
+        print(f"Range of nuclear norm: {min(c['total_conv_nuclear_norm'] for c in all_configs):.1f} - {max(c['total_conv_nuclear_norm'] for c in all_configs):.1f}")
     
     return all_configs
 
