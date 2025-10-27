@@ -837,6 +837,8 @@ def generate_architecture_library(supernet_path: str,
         num_classes = 100
     elif dataset == 'imagenet':
         num_classes = 1000
+    elif dataset == 'tiny_imagenet':
+        num_classes = 200
     elif dataset == 'sst2':
         num_classes = 2
     elif dataset == 'ag_news':

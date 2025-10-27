@@ -6,7 +6,11 @@
       "Bash(python plot_correlation.py:*)",
       "Bash(timeout 15 python:*)",
       "Bash(git checkout:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git stash show:*)",
+      "Bash(sed:*)",
+      "Bash(git switch:*)",
+      "Bash(git stash:*)"
     ],
     "deny": [],
     "ask": []
