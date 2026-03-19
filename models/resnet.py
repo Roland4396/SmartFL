@@ -7,7 +7,7 @@ import torch.nn.functional as F
 import numpy as np
 from args import arg_parser, modify_args
 from models.model_utils import Scaler, conv3x3
-from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json
+from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json, find_all_growth_configs
 
 class Classifier(nn.Module):
     def __init__(self, in_planes, num_classes, num_conv_layers=3, reduction=1, scale=1.):
@@ -118,16 +118,23 @@ class Bottleneck(nn.Module):
 
 
 class ResNet(nn.Module):
-    def __init__(self,participating_levels, block, layers, num_classes, ee_layer_locations=[], scale=1., trs=False):
+    def __init__(self,participating_levels, block, layers, num_classes, ee_layer_locations=[], scale=1., trs=False, args=None):
         super(ResNet, self).__init__()
         self.stored_inp_kwargs = copy.deepcopy(locals())
         del self.stored_inp_kwargs['self']
         del self.stored_inp_kwargs['__class__']
-        args = arg_parser.parse_args()
-        args = modify_args(args)
+
+        # Use provided args or parse from command line
+        if args is None:
+            args = arg_parser.parse_args()
+            args = modify_args(args)
         # Use auto-generated config library path if not specified
         if args.config_library_path is None:
-            model_name = getattr(args, 'model', 'resnet')
+            # Extract model name from arch (matching main.py logic)
+            if hasattr(args, 'arch') and args.arch and 'resnet' in args.arch:
+                model_name = 'resnet'
+            else:
+                model_name = getattr(args, 'model', 'resnet')
             dataset_name = getattr(args, 'data', 'cifar100')
             config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
         else:
@@ -170,6 +177,22 @@ class ResNet(nn.Module):
                 config = best_configs_for_round[level]
                 ee_loc_list.append(config['early_exit_location'])
             wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
+
+            # TDD: 如果启用了 TDD，计算 Growth configs 并把它们的 exit 位置也加入
+            if getattr(args, 'enable_tdd', 0) == 1:
+                growth_configs = find_all_growth_configs(
+                    best_configs_for_round, all_model_configs, model_type="resnet"
+                )
+                # 把 growth exit 位置加入 ee_loc_list
+                for level, growth_config in growth_configs.items():
+                    if growth_config is not None:
+                        growth_exit = growth_config['early_exit_location']
+                        if growth_exit not in ee_loc_list:
+                            ee_loc_list.append(growth_exit)
+                # 重新排序
+                ee_loc_list = sorted(ee_loc_list)
+                print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
+
         ee_loc_list=ee_loc_list[:-1]
         ee_layer_locations=ee_loc_list
         if num_classes == 200:
@@ -178,7 +201,9 @@ class ResNet(nn.Module):
             factor = 1
         print(ee_layer_locations)
         self.scale = scale
-        self.in_planes = int(16 * scale * factor)
+        # 使用 wide_scales[0] 而不是 scale 来初始化 in_planes
+        # 这样可以避免全局模型和本地模型因为 shortcut 结构不同而导致权重复制问题
+        self.in_planes = int(16 * wide_scales[0] * factor)
         self.num_blocks = len(ee_layer_locations) + 1
         self.num_classes = num_classes
         self.trs = trs
@@ -315,4 +340,4 @@ def resnet110_1(args, params):
 
 def resnet110_4(participating_levels,args, params):
     return ResNet(participating_levels,BasicBlock, [18, 18, 18], args.num_classes, ee_layer_locations=args.ee_locs,
-                  scale=params.get('scale', 1), trs=args.track_running_stats)
+                  scale=params.get('scale', 1), trs=args.track_running_stats, args=args)

@@ -26,7 +26,18 @@ def modify_args(args):
         raise NotImplementedError
 
     if not hasattr(args, "save_path") or args.save_path is None:
-        model_name = getattr(args, 'model', 'vgg')
+        # Extract model name from arch (e.g., 'mobilenet_v2_4' -> 'mobilenet')
+        if hasattr(args, 'arch') and args.arch:
+            if 'mobilenet' in args.arch:
+                model_name = 'mobilenet'
+            elif 'resnet' in args.arch:
+                model_name = 'resnet'
+            elif 'vgg' in args.arch:
+                model_name = 'vgg'
+            else:
+                model_name = getattr(args, 'model', 'vgg')
+        else:
+            model_name = getattr(args, 'model', 'vgg')
         dataset_name = getattr(args, 'data', 'cifar100')
         alpha = getattr(args, 'alpha', 100)
         args.save_path = f"outputs/{model_name}_{dataset_name}_{alpha}_independent"
@@ -118,12 +129,23 @@ fl_group.add_argument('--alpha', type=int, default=100,
                       help='data nonIID alpha')
 fl_group.add_argument('-trs', '--track_running_stats', action='store_true',
                       help='trs')
-fl_group.add_argument('--flops_constraints', type=float, nargs='*', default=[285.9737, 443.4474, 513.4869, 532.4800],
+fl_group.add_argument('--flops_constraints', type=float, nargs='*', default=[83.4,99.7,138.5,253.1],
                       help='Max FLOPs (M) for each level (0 to 3)')
-fl_group.add_argument('--params_constraints', type=float, nargs='*', default=[5.7838, 10.1540, 18.5467, 34.0154],
+fl_group.add_argument('--params_constraints', type=float, nargs='*', default=[0.21,0.46,0.86,1.73],
                       help='Max parameters (M) for each level (0 to 3). Optional, same length as flops_constraints if provided.')
 fl_group.add_argument('--independent_selection', action='store_true',
                       help='Use independent model selection (no hierarchical constraints). Each level independently maximizes nuclear norm.')
+fl_group.add_argument('--use_random_search', action='store_true',
+                      help='Use pure random search for architecture generation (true random baseline, no PPO optimization)')
+
+# Time-Domain Decomposition (TDD) parameters
+tdd_group = arg_parser.add_argument_group('tdd', 'Time-Domain Decomposition setting')
+tdd_group.add_argument('--enable_tdd', type=int, default=0,
+                       help='Enable Time-Domain Decomposition (0=disabled, 1=enabled)')
+tdd_group.add_argument('--rotation_period', type=int, default=10,
+                       help='Rotation period for TDD in rounds (default: 10)')
+tdd_group.add_argument('--tdd_growth_ratio', type=float, default=0.5,
+                       help='Ratio of devices using Growth mode vs Normal mode (default: 0.5)')
 
 # Three-stage pipeline control
 pipeline_group = arg_parser.add_argument_group('pipeline', 'Three-stage pipeline control')

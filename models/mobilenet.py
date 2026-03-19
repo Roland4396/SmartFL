@@ -1,8 +1,14 @@
 import copy
+import os
 import torch
 import torch.nn as nn
 from args import arg_parser, modify_args
-from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json
+from hierarchical_model_selector import (
+    find_best_config_for_distribution,
+    find_best_config_independent,
+    load_configs_from_json,
+    find_all_growth_configs,
+)
 
 
 class LinearBottleNeck(nn.Module):
@@ -40,18 +46,24 @@ class MobileNetV2(nn.Module):
     MobileNetV2 implementation with early exit support for federated learning
     """
 
-    def __init__(self, participating_levels, num_channels=3, num_classes=100, trs=True, scale=1.0, ee_layer_locations=[]):
+    def __init__(self, participating_levels, num_channels=3, num_classes=100, trs=True, scale=1.0, ee_layer_locations=[], args=None):
         super(MobileNetV2, self).__init__()
         self.stored_inp_kwargs = copy.deepcopy(locals())
         del self.stored_inp_kwargs['self']
         del self.stored_inp_kwargs['__class__']
 
-        args = arg_parser.parse_args()
-        args = modify_args(args)
+        # Use provided args or parse from command line
+        if args is None:
+            args = arg_parser.parse_args()
+            args = modify_args(args)
 
         # Use auto-generated config library path if not specified
         if args.config_library_path is None:
-            model_name = getattr(args, 'model', 'mobilenet')
+            # Extract model name from arch (matching main.py logic)
+            if hasattr(args, 'arch') and args.arch and 'mobilenet' in args.arch:
+                model_name = 'mobilenetv2'
+            else:
+                model_name = getattr(args, 'model', 'mobilenet')
             dataset_name = getattr(args, 'data', 'cifar100')
             config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
         else:
@@ -88,7 +100,7 @@ class MobileNetV2(nn.Module):
             print("Warning: No valid hierarchical configuration found. Using default MobileNetV2 configuration.")
             # Use default configuration
             ee_loc_list = [6, 8] if len(participating_levels) > 1 else []
-            wide_scales = [1.0] * 10  # Default multipliers for MobileNetV2 stages
+            wide_scales = [1.0] * 8  # Default multipliers for MobileNetV2 8 stages
         else:
             ee_loc_list = []
             for level in sorted(best_configs_for_round.keys()):
@@ -98,70 +110,84 @@ class MobileNetV2(nn.Module):
             # Lower levels' width values after their early_exit are meaningless
             wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
 
+            if getattr(args, 'enable_tdd', 0) == 1:
+                growth_configs = find_all_growth_configs(
+                    best_configs_for_round, all_model_configs, model_type="mobilenet"
+                )
+                for growth_config in growth_configs.values():
+                    if growth_config is None:
+                        continue
+                    growth_exit = growth_config['early_exit_location']
+                    if growth_exit not in ee_loc_list:
+                        ee_loc_list.append(growth_exit)
+                ee_loc_list = sorted(ee_loc_list)
+                print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
+
         ee_loc_list = ee_loc_list[:-1]
-        ee_layer_locations = ee_loc_list
+        ee_layer_locations = sorted(ee_loc_list)
 
         self.scale = scale
+        self.wide_scales = wide_scales
         self.num_classes = num_classes
         self.num_channels = num_channels
         self.trs = trs
         self.ee_layer_locations = ee_layer_locations
 
-        # Set default exit points if not specified
-        if not ee_layer_locations:
-            self.exit1 = 6
-            self.exit2 = 8
-        elif len(ee_layer_locations) == 1:
-            self.exit1 = ee_layer_locations[0]
-            self.exit2 = 8
-        else:
-            self.exit1 = ee_layer_locations[0]
-            self.exit2 = ee_layer_locations[1] if len(ee_layer_locations) > 1 else 8
+        if not self.ee_layer_locations:
+            self.ee_layer_locations = [6, 8]
+
+        # Backward-compatible aliases for existing utilities that inspect the first exits.
+        self.exit1 = self.ee_layer_locations[0] if len(self.ee_layer_locations) > 0 else None
+        self.exit2 = self.ee_layer_locations[1] if len(self.ee_layer_locations) > 1 else None
+        self.exit3 = self.ee_layer_locations[2] if len(self.ee_layer_locations) > 2 else None
 
         self.pre = nn.Sequential(
-            nn.Conv2d(num_channels, int(32 * scale), 3, padding=1),
-            nn.BatchNorm2d(int(32 * scale), track_running_stats=trs),
+            nn.Conv2d(num_channels, int(32 * wide_scales[0]), 3, padding=1),
+            nn.BatchNorm2d(int(32 * wide_scales[0]), track_running_stats=trs),
             nn.ReLU6(inplace=True)
         )
 
-        magic_list = [0, 16 * scale, 24 * scale, 32 * scale, 64 * scale, 96 * scale, 160 * scale, 160 * scale,
-                      160 * scale, 320 * scale]
+        # Modified to use 8 stages: merge three 160-channel blocks to share wide_scales[6]
+        magic_list = [0, 16 * wide_scales[1], 24 * wide_scales[2], 32 * wide_scales[3],
+                      64 * wide_scales[4], 96 * wide_scales[5], 160 * wide_scales[6],
+                      160 * wide_scales[6], 160 * wide_scales[6], 320 * wide_scales[7]]
 
         self.block = nn.Sequential(
-            LinearBottleNeck(int(32 * scale), int(16 * scale), 1, 1, trs),
-            self._make_stage(2, int(16 * scale), int(24 * scale), 2, 6, trs),
-            self._make_stage(3, int(24 * scale), int(32 * scale), 2, 6, trs),
-            self._make_stage(4, int(32 * scale), int(64 * scale), 2, 6, trs),
-            self._make_stage(3, int(64 * scale), int(96 * scale), 1, 6, trs),
-            self._make_stage(3, int(96 * scale), int(160 * scale), 2, 6, trs)[0],
-            self._make_stage(3, int(96 * scale), int(160 * scale), 2, 6, trs)[1],
-            self._make_stage(3, int(96 * scale), int(160 * scale), 2, 6, trs)[2],
-            LinearBottleNeck(int(160 * scale), int(320 * scale), 1, 6, trs)
+            LinearBottleNeck(int(32 * wide_scales[0]), int(16 * wide_scales[1]), 1, 1, trs),
+            self._make_stage(2, int(16 * wide_scales[1]), int(24 * wide_scales[2]), 2, 6, trs),
+            self._make_stage(3, int(24 * wide_scales[2]), int(32 * wide_scales[3]), 2, 6, trs),
+            self._make_stage(4, int(32 * wide_scales[3]), int(64 * wide_scales[4]), 2, 6, trs),
+            self._make_stage(3, int(64 * wide_scales[4]), int(96 * wide_scales[5]), 1, 6, trs),
+            LinearBottleNeck(int(96 * wide_scales[5]), int(160 * wide_scales[6]), 2, 6, trs),
+            LinearBottleNeck(int(160 * wide_scales[6]), int(160 * wide_scales[6]), 1, 6, trs),
+            LinearBottleNeck(int(160 * wide_scales[6]), int(160 * wide_scales[6]), 1, 6, trs),
+            LinearBottleNeck(int(160 * wide_scales[6]), int(320 * wide_scales[7]), 1, 6, trs)
         )
 
-        # Early exit classifiers
-        self.ee_classifiers = nn.ModuleList()
-
-        # Add classifiers for early exits
-        for i, exit_point in enumerate([self.exit1, self.exit2]):
-            self.ee_classifiers.append(nn.Sequential(
-                nn.Conv2d(int(magic_list[exit_point]), int(magic_list[exit_point] * 4), 1),
-                nn.BatchNorm2d(int(magic_list[exit_point] * 4), track_running_stats=trs),
+        # Create one classifier for each configured early exit, followed by the final head.
+        self.classifier = nn.ModuleList()
+        self.exit_to_classifier_idx = {}
+        for classifier_idx, exit_loc in enumerate(self.ee_layer_locations):
+            exit_channels = int(magic_list[exit_loc])
+            self.classifier.append(nn.Sequential(
+                nn.Conv2d(exit_channels, exit_channels * 4, 1),
+                nn.BatchNorm2d(exit_channels * 4, track_running_stats=trs),
                 nn.ReLU6(inplace=True),
                 nn.AdaptiveMaxPool2d((1, 1)),
-                nn.Conv2d(int(magic_list[exit_point] * 4), num_classes, 1),
+                nn.Conv2d(exit_channels * 4, num_classes, 1),
                 nn.Flatten()
             ))
+            self.exit_to_classifier_idx[exit_loc] = classifier_idx
 
-        # Final classifier
-        self.classifier = nn.Sequential(
+        # Final classifier is always placed after the last block.
+        self.classifier.append(nn.Sequential(
             nn.Conv2d(int(magic_list[9]), int(magic_list[9] * 4), 1),
             nn.BatchNorm2d(int(magic_list[9] * 4), track_running_stats=trs),
             nn.ReLU6(inplace=True),
             nn.AdaptiveMaxPool2d((1, 1)),
             nn.Conv2d(int(magic_list[9] * 4), num_classes, 1),
-            nn.Flatten(),
-        )
+            nn.Flatten()
+        ))
 
     def _make_stage(self, n, in_channels, out_channels, stride, t, trs):
         layers = [LinearBottleNeck(in_channels, out_channels, stride, t, trs)]
@@ -173,37 +199,27 @@ class MobileNetV2(nn.Module):
         return nn.Sequential(*layers)
 
     def forward(self, x, manual_early_exit_index=0):
-        ee_outs = []
-        output = x
+        preds = []
+        output = self.pre(x)
 
-        output = self.pre(output)
-
-        # Process blocks and check for early exits
         for i, layer in enumerate(self.block):
             output = layer(output)
+            exit_loc = i + 1
 
-            # Check for early exits
-            if i == self.exit1 - 1 and len(self.ee_classifiers) > 0:
-                ee_out = self.ee_classifiers[0](output)
-                ee_outs.append(ee_out)
+            if exit_loc in self.exit_to_classifier_idx:
+                classifier_idx = self.exit_to_classifier_idx[exit_loc]
+                ee_out = self.classifier[classifier_idx](output)
+                preds.append(ee_out)
 
-                if manual_early_exit_index and len(ee_outs) >= manual_early_exit_index:
-                    return ee_outs
+                if manual_early_exit_index and len(preds) >= manual_early_exit_index:
+                    return preds
 
-            if i == self.exit2 - 1 and len(self.ee_classifiers) > 1:
-                ee_out = self.ee_classifiers[1](output)
-                ee_outs.append(ee_out)
-
-                if manual_early_exit_index and len(ee_outs) >= manual_early_exit_index:
-                    return ee_outs
-
-        # Final output
-        preds = ee_outs
-        final_output = self.classifier(output)
+        final_output = self.classifier[len(self.ee_layer_locations)](output)
         preds.append(final_output)
 
         if manual_early_exit_index:
-            assert len(preds) <= manual_early_exit_index
+            # Return only the requested number of outputs
+            return preds[:manual_early_exit_index]
 
         return preds
 
@@ -242,7 +258,8 @@ def mobilenet_v2_4(participating_levels, args, params):
         num_classes=num_classes,
         trs=track_running_stats,
         scale=scale,
-        ee_layer_locations=ee_layer_locations
+        ee_layer_locations=ee_layer_locations,
+        args=args
     )
 
 

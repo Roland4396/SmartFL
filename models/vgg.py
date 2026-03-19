@@ -15,7 +15,12 @@ import torch.nn.functional as F
 import torch.nn as nn
 from args import arg_parser, modify_args
 from models.model_utils import Scaler, conv3x3
-from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json
+from hierarchical_model_selector import (
+    find_best_config_for_distribution,
+    find_best_config_independent,
+    load_configs_from_json,
+    find_all_growth_configs,
+)
 
 def expand_vgg_stage_multipliers(stage_multipliers):
     """
@@ -102,17 +107,23 @@ class Classifier(nn.Module):
 
 
 class VGG(nn.Module):
-    def __init__(self, participating_levels, features, num_class=100, num_channels=3, ee_layer_locations=[], scale=1., trs=False):
+    def __init__(self, participating_levels, features, num_class=100, num_channels=3, ee_layer_locations=[], scale=1., trs=False, args=None):
         super().__init__()
         self.stored_inp_kwargs = copy.deepcopy(locals())
         del self.stored_inp_kwargs['self']
         del self.stored_inp_kwargs['__class__']
 
-        args = arg_parser.parse_args()
-        args = modify_args(args)
+        # Use provided args or parse from command line
+        if args is None:
+            args = arg_parser.parse_args()
+            args = modify_args(args)
         # Use auto-generated config library path if not specified
         if args.config_library_path is None:
-            model_name = getattr(args, 'model', 'resnet')
+            # Extract model name from arch (matching main.py logic)
+            if hasattr(args, 'arch') and args.arch and 'vgg' in args.arch:
+                model_name = 'vgg'
+            else:
+                model_name = getattr(args, 'model', 'vgg')
             dataset_name = getattr(args, 'data', 'cifar100')
             config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
         else:
@@ -156,11 +167,25 @@ class VGG(nn.Module):
             # Use highest level's width_multipliers (contains all actually-used stages)
             # Lower levels' width values after their early_exit are meaningless
             wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
+
+            if getattr(args, 'enable_tdd', 0) == 1:
+                growth_configs = find_all_growth_configs(
+                    best_configs_for_round, all_model_configs, model_type="vgg"
+                )
+                for growth_config in growth_configs.values():
+                    if growth_config is None:
+                        continue
+                    growth_exit = growth_config['early_exit_location']
+                    if growth_exit not in ee_loc_list:
+                        ee_loc_list.append(growth_exit)
+                ee_loc_list = sorted(ee_loc_list)
+                print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
         print(ee_loc_list)
         ee_loc_list = ee_loc_list[:-1]
         ee_layer_locations = ee_loc_list
-    
-        print(ee_layer_locations)
+
+        print(f"[DEBUG VGG __init__] ee_layer_locations: {ee_layer_locations}")
+        print(f"[DEBUG VGG __init__] wide_scales: {wide_scales}")
         self.scale = scale
         self.wide_scales = wide_scales
         self.num_classes = num_class
@@ -242,15 +267,20 @@ class VGG(nn.Module):
                     ee_out = self.ee_classifiers[ee_idx](output)
                     ee_outs.append(ee_out)
 
-                    if manual_early_exit_index and len(ee_outs) >= manual_early_exit_index:
-                        return ee_outs
+                    # Fixed: Only stop if h_level is within valid range
+                    # If h_level > num_exit_points, this is the largest model, execute all layers
+                    if manual_early_exit_index and manual_early_exit_index <= len(self.ee_layer_locations):
+                        if len(ee_outs) >= manual_early_exit_index:
+                            return ee_outs
 
+        # Execute all layers for largest model or when no early exit is triggered
         preds = ee_outs
         final_output = self.classifier(output)
         preds.append(final_output)
 
         if manual_early_exit_index:
-            assert len(preds) <= manual_early_exit_index
+            # Allow h_level to exceed available exit points (for largest model)
+            assert len(preds) <= manual_early_exit_index or manual_early_exit_index > len(self.ee_layer_locations)
 
         return preds
 
@@ -348,7 +378,8 @@ def vgg_16_bn_eeloc(participating_levels, args, params):
         num_channels=3,
         ee_layer_locations=ee_layer_locations,
         scale=scale,
-        trs=track_running_stats)
+        trs=track_running_stats,
+        args=args)
 
 
 if __name__ == '__main__':

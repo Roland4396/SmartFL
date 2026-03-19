@@ -15,6 +15,7 @@ import json
 from typing import Dict, List, Tuple, Any
 from dataclasses import dataclass
 from tqdm import tqdm
+from datetime import datetime
 
 from models.searchable_resnet import SearchableResNet
 from models.searchable_vgg import searchable_vgg16
@@ -510,7 +511,7 @@ class PPOArchitectureAgent:
     def periodic_reset(self, batch_num):
         """Periodically reset part of network parameters to prevent over-convergence"""
         if batch_num % self.reset_frequency == 0 and batch_num > 0:
-            print(f"  → Periodic reset at batch {batch_num}")
+            print(f"  [RESET] Periodic reset at batch {batch_num}")
             
             with torch.no_grad():
                 for name, param in self.network.named_parameters():
@@ -812,7 +813,9 @@ def generate_architecture_library(supernet_path: str,
         List of architecture configurations
     """
     
-    print("=== PPO Architecture Library Generation ===")
+    start_time_obj = datetime.now()
+    start_time = start_time_obj.strftime("%Y-%m-%d %H:%M:%S")
+    print(f"=== PPO Architecture Library Generation [{start_time}] ===")
     print("Goal: Generate diverse, high-quality architectures")
     print("No FLOPs constraints - hierarchical_model_selector will filter later")
     
@@ -820,9 +823,9 @@ def generate_architecture_library(supernet_path: str,
     print(f"Loading supernet from: {supernet_path}")
     try:
         supernet_state_dict = torch.load(supernet_path, map_location='cpu')
-        print("✓ Supernet loaded successfully")
+        print("[OK] Supernet loaded successfully")
     except Exception as e:
-        print(f"✗ Failed to load supernet: {e}")
+        print(f"[ERROR] Failed to load supernet: {e}")
         return []
     
     print(f"Target architectures: {num_architectures}")
@@ -845,7 +848,7 @@ def generate_architecture_library(supernet_path: str,
         num_classes = 4
     else:
         # Default fallback
-        print(f"⚠ Warning: Unknown dataset '{dataset}', defaulting to 100 classes")
+        print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes")
         num_classes = 100
 
     # Create environment and agent
@@ -873,12 +876,13 @@ def generate_architecture_library(supernet_path: str,
         search_region = agent.choose_search_region(batch)
         region_bounds = agent.region_boundaries[search_region]
         
-        print(f"\n--- Batch {batch}/{max_batches} (Total Configs: {len(all_configs)}) ---")
+        current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        print(f"\n--- Batch {batch}/{max_batches} (Total Configs: {len(all_configs)}) [{current_time}] ---")
         if batch <= agent.exploration_phase_batches:
-            print(f"🔄 Rotation Phase: Searching eeloc region {search_region} [{region_bounds[0]}-{region_bounds[1]}]")
+            print(f"[ROTATION] Searching eeloc region {search_region} [{region_bounds[0]}-{region_bounds[1]}]")
         else:
             success_rates = [f"{agent.region_stats[i]['success_rate']:.1%}" for i in range(3)]
-            print(f"🎯 Adaptive Phase: Chosen region {search_region} [{region_bounds[0]}-{region_bounds[1]}] (Success rates: {success_rates})")
+            print(f"[ADAPTIVE] Chosen region {search_region} [{region_bounds[0]}-{region_bounds[1]}] (Success rates: {success_rates})")
         
         # Apply periodic reset for enhanced exploration
         agent.periodic_reset(batch)
@@ -896,7 +900,7 @@ def generate_architecture_library(supernet_path: str,
                 all_configs.append(config_dict)
                 new_configs_count += 1
                 
-                print(f"✓ Generated: width={[f'{w:.2f}' for w in config.width_multipliers]}, "
+                print(f"[OK] Generated: width={[f'{w:.2f}' for w in config.width_multipliers]}, "
                       f"exit={config.early_exit_location}, "
                       f"FLOPs={config.flops_m:.1f}M, "
                       f"norm={config.total_conv_nuclear_norm:.1f}, "
@@ -912,26 +916,37 @@ def generate_architecture_library(supernet_path: str,
         agent.update_region_stats(search_region, len(batch_configs), new_configs_count)
         
         if new_configs_count == 0:
-            print(f"⚠ No new unique configs in this batch (found {len(batch_configs)} total)")
+            print(f"[WARN] No new unique configs in this batch (found {len(batch_configs)} total)")
             print(f"  Current unique count: {len(all_configs)}/{num_architectures}")
-            print(f"  Unique ratio: {batch_unique_ratio:.1%} → Exploration: {new_exploration:.3f} ↑")
+            print(f"  Unique ratio: {batch_unique_ratio:.1%} -> Exploration: {new_exploration:.3f} (increasing)")
             print(f"  Cache size: {len(agent.config_cache)} cached configurations")
         else:
-            print(f"✓ Added {new_configs_count} new configs from {len(batch_configs)} generated")
-            print(f"  Unique ratio: {batch_unique_ratio:.1%} → Exploration: {new_exploration:.3f}")
+            print(f"[OK] Added {new_configs_count} new configs from {len(batch_configs)} generated")
+            print(f"  Unique ratio: {batch_unique_ratio:.1%} -> Exploration: {new_exploration:.3f}")
             print(f"  Cache size: {len(agent.config_cache)} cached configurations")
         
         # Update policy periodically
         if batch % 3 == 0:
             agent.update_policy()
-            print("  → Policy updated")
+            print("  [UPDATE] Policy updated")
     
     # Report final statistics
-    print(f"\n=== PPO Search Completed ===")
+    end_time_obj = datetime.now()
+    end_time = end_time_obj.strftime("%Y-%m-%d %H:%M:%S")
+    total_duration = end_time_obj - start_time_obj
+    total_seconds = total_duration.total_seconds()
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    seconds = int(total_seconds % 60)
+
+    print(f"\n=== PPO Search Completed [{end_time}] ===")
     print(f"Completed {max_batches} batches")
     print(f"Generated {len(all_configs)} unique configurations")
+    print(f"Total time: {hours}h {minutes}m {seconds}s ({total_seconds:.1f} seconds)")
     avg_per_batch = len(all_configs) / max_batches if max_batches > 0 else 0
     print(f"Average {avg_per_batch:.1f} unique configs per batch")
+    configs_per_second = len(all_configs) / total_seconds if total_seconds > 0 else 0
+    print(f"Speed: {configs_per_second:.2f} configs/second")
     
     # Add metadata to the configuration file
     config_with_metadata = {
@@ -957,6 +972,165 @@ def generate_architecture_library(supernet_path: str,
         print(f"Range of FLOPs: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
         print(f"Range of nuclear norm: {min(c['total_conv_nuclear_norm'] for c in all_configs):.1f} - {max(c['total_conv_nuclear_norm'] for c in all_configs):.1f}")
     
+    return all_configs
+
+
+def generate_random_architecture_library(supernet_path: str,
+                                        output_path: str = 'random_architecture_library.json',
+                                        num_architectures: int = 50000,
+                                        model_type: str = "resnet",
+                                        dataset: str = "cifar10") -> List[Dict]:
+    """
+    Generate architecture library using PURE RANDOM SEARCH (no optimization)
+
+    This is the true random baseline - completely uniform sampling without any
+    gradient-based optimization, reward guidance, or diversity mechanisms.
+    """
+
+    print("=== PURE RANDOM SEARCH (Baseline) ===")
+    print("No optimization, no reward, no PPO - just uniform random sampling")
+
+    # Load supernet
+    print(f"Loading supernet from: {supernet_path}")
+    try:
+        supernet_state_dict = torch.load(supernet_path, map_location='cpu')
+        print("[OK] Supernet loaded successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to load supernet: {e}")
+        return []
+
+    print(f"Target unique architectures: {num_architectures}")
+    print(f"Model type: {model_type}")
+    print(f"Dataset: {dataset}")
+
+    # Determine number of classes
+    if dataset == 'cifar10':
+        num_classes = 10
+    elif dataset == 'cifar100':
+        num_classes = 100
+    elif dataset == 'imagenet':
+        num_classes = 1000
+    elif dataset == 'tiny_imagenet':
+        num_classes = 200
+    elif dataset == 'sst2':
+        num_classes = 2
+    elif dataset == 'ag_news':
+        num_classes = 4
+    else:
+        print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes")
+        num_classes = 100
+
+    # Set model-specific parameters
+    width_options = np.linspace(0.5, 1.0, 10).tolist()
+
+    if model_type.lower() == "resnet":
+        exit_location_range = (28, 54)
+        num_stages = 3
+    elif model_type.lower() == "vgg":
+        exit_location_range = (4, 13)
+        num_stages = 6
+    elif model_type.lower() == "mobilenet":
+        exit_location_range = (3, 9)
+        num_stages = 8
+    else:
+        raise ValueError(f"Unsupported model type: {model_type}")
+
+    # Create environment (only for evaluation, not for policy)
+    env = ArchitectureSearchEnv(
+        supernet_state_dict,
+        model_type=model_type,
+        num_classes=num_classes,
+        width_options=width_options,
+        exit_location_range=exit_location_range,
+        num_stages=num_stages
+    )
+
+    all_configs = []
+    seen_configs = set()
+    config_cache = {}
+    env.config_cache = config_cache
+
+    # 计算理论配置空间大小（用于统计）
+    theoretical_max = (len(width_options) ** num_stages) * (exit_location_range[1] - exit_location_range[0])
+    print(f"Theoretical configuration space: {theoretical_max:,}")
+    print(f"Target configurations: {num_architectures:,}")
+
+    attempts = 0
+    max_attempts = num_architectures
+
+    print("\nGenerating random architectures...")
+    pbar = tqdm(total=max_attempts, desc="Random Search")
+
+    while len(all_configs) < num_architectures and attempts < max_attempts:
+        attempts += 1
+
+        # PURE RANDOM SAMPLING - no optimization, no guidance
+        width_multipliers = [np.random.choice(width_options) for _ in range(num_stages)]
+        exit_location = np.random.randint(exit_location_range[0], exit_location_range[1])
+
+        config_id = (tuple(width_multipliers), exit_location)
+
+        if config_id in seen_configs:
+            continue
+
+        seen_configs.add(config_id)
+
+        # Evaluate architecture (compute FLOPs and nuclear norm)
+        try:
+            action_env = {
+                'width_multipliers': np.array(width_multipliers, dtype=np.float32),
+                'exit_location': np.array(exit_location - exit_location_range[0])
+            }
+
+            _, _, _, _, info = env.step(action_env)
+
+            if 'config' in info and info['config'] is not None:
+                config_dict = info['config']
+                all_configs.append(config_dict)
+                pbar.update(1)
+
+                if len(all_configs) % 1000 == 0:
+                    print(f"\n[{len(all_configs)}/{num_architectures}] "
+                          f"Attempts: {attempts}, Cache: {len(config_cache)}")
+
+        except Exception as e:
+            continue
+
+    pbar.close()
+
+    print(f"\n=== Random Search Completed ===")
+    print(f"Generated {len(all_configs)} unique configurations")
+    print(f"Target was: {num_architectures}")
+    print(f"Theoretical max: {theoretical_max}")
+    print(f"Coverage: {len(all_configs)/theoretical_max*100:.1f}% of configuration space")
+    print(f"Total attempts: {attempts}")
+    print(f"Success rate: {len(all_configs)/attempts*100:.1f}%")
+
+    # Add metadata
+    config_with_metadata = {
+        "metadata": {
+            "model_type": model_type,
+            "dataset": dataset,
+            "num_classes": num_classes,
+            "search_method": "pure_random_search",
+            "total_configs": len(all_configs),
+            "theoretical_max": theoretical_max,
+            "coverage_percent": len(all_configs)/theoretical_max*100,
+            "total_attempts": attempts
+        },
+        "configurations": all_configs
+    }
+
+    # Save results
+    with open(output_path, 'w') as f:
+        json.dump(config_with_metadata, f, indent=4)
+
+    print(f"\n=== Configuration Library Saved ===")
+    print(f"Saved to: {output_path}")
+    if all_configs:
+        print(f"FLOPs range: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
+        print(f"Nuclear norm range: {min(c['total_conv_nuclear_norm'] for c in all_configs):.1f} - {max(c['total_conv_nuclear_norm'] for c in all_configs):.1f}")
+
     return all_configs
 
 

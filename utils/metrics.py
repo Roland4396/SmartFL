@@ -150,39 +150,59 @@ def calculate_model_size(model: nn.Module, early_exit_location: Optional[int] = 
     if early_exit_location is None:
         # Calculate all parameters
         return sum(p.numel() for p in model.parameters())
-    
+
     model.eval()
     total_params = 0
-    
-    # Calculate target conv layer count based on early_exit_location
-    # For SearchableResNet: each BasicBlock has 2 conv layers + 1 initial conv1
-    target_conv_layers = 1 + ((early_exit_location + 1) * 2)  # +1 because we include the exit block
-    
-    conv_layer_count = 0
-    
-    for name, module in model.named_modules():
-        if isinstance(module, nn.Conv2d):
-            # Check if we should stop processing layers
-            if conv_layer_count >= target_conv_layers:
-                break
-            conv_layer_count += 1
-            
-        # Count parameters for layers that should be included
-        if isinstance(module, (nn.Conv2d, nn.BatchNorm2d, nn.Linear)):
-            # Only count parameters up to the early exit location
+
+    # Detect model type
+    model_class_name = model.__class__.__name__
+
+    if 'MobileNet' in model_class_name:
+        # For MobileNet: count parameters up to early_exit_location (block index)
+        # Count pre layer
+        if hasattr(model, 'pre'):
+            total_params += sum(p.numel() for p in model.pre.parameters())
+
+        # Count blocks up to early_exit_location
+        if hasattr(model, 'blocks'):
+            for i in range(min(early_exit_location + 1, len(model.blocks))):
+                total_params += sum(p.numel() for p in model.blocks[i].parameters())
+
+        # Count early exit classifier
+        if hasattr(model, 'early_exit_classifier') and model.early_exit_classifier is not None:
+            total_params += sum(p.numel() for p in model.early_exit_classifier.parameters())
+
+    else:
+        # For ResNet/VGG: use conv layer counting method
+        # Calculate target conv layer count based on early_exit_location
+        # For SearchableResNet: each BasicBlock has 2 conv layers + 1 initial conv1
+        target_conv_layers = 1 + ((early_exit_location + 1) * 2)  # +1 because we include the exit block
+
+        conv_layer_count = 0
+
+        for name, module in model.named_modules():
             if isinstance(module, nn.Conv2d):
-                if conv_layer_count <= target_conv_layers:
-                    total_params += sum(p.numel() for p in module.parameters())
-            elif isinstance(module, nn.BatchNorm2d):
-                # BatchNorm layers follow Conv layers, so use the same logic
-                if conv_layer_count <= target_conv_layers:
-                    total_params += sum(p.numel() for p in module.parameters())
-            elif isinstance(module, nn.Linear):
-                # For early exit classifiers, always include them
-                # For final classifier, only include if we're at the end
-                if 'early_exit_classifier' in name or (conv_layer_count <= target_conv_layers):
-                    total_params += sum(p.numel() for p in module.parameters())
-    
+                # Check if we should stop processing layers
+                if conv_layer_count >= target_conv_layers:
+                    break
+                conv_layer_count += 1
+
+            # Count parameters for layers that should be included
+            if isinstance(module, (nn.Conv2d, nn.BatchNorm2d, nn.Linear)):
+                # Only count parameters up to the early exit location
+                if isinstance(module, nn.Conv2d):
+                    if conv_layer_count <= target_conv_layers:
+                        total_params += sum(p.numel() for p in module.parameters())
+                elif isinstance(module, nn.BatchNorm2d):
+                    # BatchNorm layers follow Conv layers, so use the same logic
+                    if conv_layer_count <= target_conv_layers:
+                        total_params += sum(p.numel() for p in module.parameters())
+                elif isinstance(module, nn.Linear):
+                    # For early exit classifiers, always include them
+                    # For final classifier, only include if we're at the end
+                    if 'early_exit_classifier' in name or (conv_layer_count <= target_conv_layers):
+                        total_params += sum(p.numel() for p in module.parameters())
+
     return total_params
 
 

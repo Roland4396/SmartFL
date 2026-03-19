@@ -59,7 +59,7 @@ def measure_layer(layer, *x):
         delta_params = get_layer_param(layer)
 
     ### ops_nonlinearity
-    elif type_name in ['ReLU', 'Tanh', 'GELUActivation']:
+    elif type_name in ['ReLU', 'ReLU6', 'Tanh', 'GELUActivation']:
         delta_ops = x.numel()
         delta_params = get_layer_param(layer)
 
@@ -102,7 +102,7 @@ def measure_layer(layer, *x):
 
     count_ops += delta_ops
     count_params += delta_params
-    if type_name == 'Linear' and layer.out_features in [2, 10, 100, 1000]:
+    if type_name == 'Linear' and layer.out_features in [2, 10, 100, 200, 1000]:
         print('---------------------')
         print('FLOPs: %.2fM, Params: %.2fM' % (count_ops / 1e6, count_params / 1e6))
         cls_ops.append(count_ops)

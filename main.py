@@ -18,7 +18,7 @@ from fed import Federator
 from models.model_utils import KDLoss
 from predict import validate, local_validate
 from utils.utils import load_checkpoint, measure_flops, load_state_dict, save_user_groups, load_user_groups
-from ppo_architecture_generator import generate_architecture_library
+from ppo_architecture_generator import generate_architecture_library, generate_random_architecture_library
 
 np.set_printoptions(precision=2)
 
@@ -62,7 +62,18 @@ def determine_stages_to_run(args):
 def get_default_config_library_path(args):
     """Generate default config library path based on model and dataset"""
     if args.config_library_path is None:
-        model_name = getattr(args, 'model', 'resnet')
+        # Extract model name from arch
+        if hasattr(args, 'arch') and args.arch:
+            if 'mobilenet' in args.arch:
+                model_name = 'mobilenetv2'
+            elif 'resnet' in args.arch:
+                model_name = 'resnet'
+            elif 'vgg' in args.arch:
+                model_name = 'vgg'
+            else:
+                model_name = getattr(args, 'model', 'resnet')
+        else:
+            model_name = getattr(args, 'model', 'resnet')
         dataset_name = getattr(args, 'data', 'cifar100')
         args.config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
         print(f"Auto-generated config library path: {args.config_library_path}")
@@ -71,7 +82,18 @@ def get_default_config_library_path(args):
 def get_default_supernet_save_path(args):
     """Generate default supernet save path based on model and dataset"""
     if args.supernet_save_path == 'supernet.pth':  # Only change if using default
-        model_name = getattr(args, 'model', 'resnet')
+        # Extract model name from arch
+        if hasattr(args, 'arch') and args.arch:
+            if 'mobilenet' in args.arch:
+                model_name = 'mobilenetv2'
+            elif 'resnet' in args.arch:
+                model_name = 'resnet'
+            elif 'vgg' in args.arch:
+                model_name = 'vgg'
+            else:
+                model_name = getattr(args, 'model', 'resnet')
+        else:
+            model_name = getattr(args, 'model', 'resnet')
         dataset_name = getattr(args, 'data', 'cifar100')
         args.supernet_save_path = f"{model_name}_{dataset_name}_supernet.pth"
         print(f"Auto-generated supernet save path: {args.supernet_save_path}")
@@ -123,9 +145,12 @@ def run_stage1_supernet_training(args):
 
 
 def run_stage2_ppo_generation(args):
-    """Execute Stage 2: PPO Architecture Generation"""
+    """Execute Stage 2: Architecture Generation (PPO or Random Search)"""
     print("=" * 60)
-    print("STAGE 2: PPO ARCHITECTURE GENERATION")
+    if args.use_random_search:
+        print("STAGE 2: PURE RANDOM SEARCH (No Optimization)")
+    else:
+        print("STAGE 2: PPO ARCHITECTURE GENERATION")
     print("=" * 60)
 
     # Set default supernet save path with model and dataset info
@@ -133,22 +158,49 @@ def run_stage2_ppo_generation(args):
 
     print(f"Loading supernet from: {args.supernet_save_path}")
     print(f"Generating {args.num_architectures} architectures...")
-    print(f"Using {args.episodes_per_batch} episodes per batch")
-    
+
+    # Extract model type from arch (matching train_supernet.py logic)
+    if hasattr(args, 'arch') and args.arch:
+        if 'mobilenet' in args.arch.lower():
+            model_type = 'mobilenet'
+        elif 'resnet' in args.arch.lower():
+            model_type = 'resnet'
+        elif 'vgg' in args.arch.lower():
+            model_type = 'vgg'
+        else:
+            model_type = getattr(args, 'model', 'resnet')
+    else:
+        model_type = getattr(args, 'model', 'resnet')
+
+    print(f"Model type: {model_type}")
+
     try:
-        configs = generate_architecture_library(
-            supernet_path=args.supernet_save_path,
-            output_path=args.config_library_path,
-            num_architectures=args.num_architectures,
-            episodes_per_batch=args.episodes_per_batch,
-            model_type=getattr(args, 'model', 'resnet'),
-            dataset=getattr(args, 'data', 'cifar100')
-        )
-        
+        if args.use_random_search:
+            # Use pure random search (true baseline)
+            print("Using PURE RANDOM SEARCH - uniform sampling without optimization")
+            configs = generate_random_architecture_library(
+                supernet_path=args.supernet_save_path,
+                output_path=args.config_library_path,
+                num_architectures=args.num_architectures,
+                model_type=model_type,
+                dataset=getattr(args, 'data', 'cifar100')
+            )
+        else:
+            # Use PPO-based search
+            print(f"Using PPO with {args.episodes_per_batch} episodes per batch")
+            configs = generate_architecture_library(
+                supernet_path=args.supernet_save_path,
+                output_path=args.config_library_path,
+                num_architectures=args.num_architectures,
+                episodes_per_batch=args.episodes_per_batch,
+                model_type=model_type,
+                dataset=getattr(args, 'data', 'cifar100')
+            )
+
         print(f"Successfully generated {len(configs)} unique configurations")
         print(f"Saved to: {args.config_library_path}")
         print("Stage 2 completed successfully!")
-        
+
     except Exception as e:
         print(f"Stage 2 failed: {e}")
         raise

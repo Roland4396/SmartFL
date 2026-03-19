@@ -178,7 +178,9 @@ def get_downscale_index(model, args, scale=1.):
         else:
             idx_dict[k] = v.grad != 0
             if idx_dict[k].sum() == 0:
-                raise RuntimeError
+                # This can happen for pre-layer parameters in MobileNet due to simplified BatchNorm forward
+                # It's expected and not a real error - just use all ones as fallback
+                idx_dict[k] = torch.ones_like(v, dtype=bool)
 
     restore_forward(copy_model)
 

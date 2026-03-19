@@ -1,7 +1,3 @@
-from datasets import load_dataset
-from transformers import AutoTokenizer
-
-import pandas as pd
 import torch
 from torch.utils.data import DataLoader, Dataset
 from torch.nn.utils.rnn import pad_sequence
@@ -13,6 +9,16 @@ import zipfile
 import shutil
 from PIL import Image
 from data_tools.sampling import *
+
+# Optional NLP dependencies are not needed for the vision training paths used in this repo.
+try:
+    from datasets import load_dataset
+    from transformers import AutoTokenizer
+    import pandas as pd
+except ImportError:
+    load_dataset = None
+    AutoTokenizer = None
+    pd = None
 
 
 class TinyImageNetDataset(Dataset):

@@ -9,15 +9,15 @@ class LinearBottleNeck(nn.Module):
         super(LinearBottleNeck, self).__init__()
 
         self.residual = nn.Sequential(
-            nn.Conv2d(in_channels, in_channels * t, 1, bias=False),
+            nn.Conv2d(in_channels, in_channels * t, 1),
             nn.BatchNorm2d(in_channels * t),
             nn.ReLU6(inplace=True),
 
-            nn.Conv2d(in_channels * t, in_channels * t, 3, stride=stride, padding=1, groups=in_channels * t, bias=False),
+            nn.Conv2d(in_channels * t, in_channels * t, 3, stride=stride, padding=1, groups=in_channels * t),
             nn.BatchNorm2d(in_channels * t),
             nn.ReLU6(inplace=True),
 
-            nn.Conv2d(in_channels * t, out_channels, 1, bias=False),
+            nn.Conv2d(in_channels * t, out_channels, 1),
             nn.BatchNorm2d(out_channels)
         )
 
@@ -55,17 +55,17 @@ class SearchableMobileNetV2(nn.Module):
     def __init__(self, num_classes, width_multipliers, early_exit_location=None, num_channels=3):
         super(SearchableMobileNetV2, self).__init__()
 
-        if len(width_multipliers) != 10:
-            raise ValueError(f"Expected 10 width multipliers for MobileNetV2, got {len(width_multipliers)}")
+        if len(width_multipliers) != 8:
+            raise ValueError(f"Expected 8 width multipliers for MobileNetV2, got {len(width_multipliers)}")
 
         self.num_classes = num_classes
         self.width_multipliers = width_multipliers
         self.early_exit_location = early_exit_location
         self.num_channels = num_channels
 
-        # Stage channel definitions with width_multipliers (10 stages total)
+        # Stage channel definitions with width_multipliers (8 stages total)
         # Matching mobilenet.py magic_list: [0, 16, 24, 32, 64, 96, 160, 160, 160, 320]
-        # Each block has independent width control
+        # Stage 6 controls all three 160-channel blocks (blocks 5,6,7) with the same multiplier
         self.stage_channels = [
             int(32 * width_multipliers[0]),   # Stage 0: pre layer (initial conv)
             int(16 * width_multipliers[1]),   # Stage 1: block[0] output
@@ -73,15 +73,15 @@ class SearchableMobileNetV2(nn.Module):
             int(32 * width_multipliers[3]),   # Stage 3: block[2] output
             int(64 * width_multipliers[4]),   # Stage 4: block[3] output
             int(96 * width_multipliers[5]),   # Stage 5: block[4] output
-            int(160 * width_multipliers[6]),  # Stage 6: block[5] output (first 160)
-            int(160 * width_multipliers[7]),  # Stage 7: block[6] output (second 160)
-            int(160 * width_multipliers[8]),  # Stage 8: block[7] output (third 160)
-            int(320 * width_multipliers[9])   # Stage 9: block[8] output (final)
+            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (all three 160s share same multiplier)
+            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (second 160)
+            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (third 160)
+            int(320 * width_multipliers[7])   # Stage 7: block[8] output (final)
         ]
 
         # Initial convolution
         self.pre = nn.Sequential(
-            nn.Conv2d(num_channels, self.stage_channels[0], 3, padding=1, bias=False),
+            nn.Conv2d(num_channels, self.stage_channels[0], 3, padding=1),
             nn.BatchNorm2d(self.stage_channels[0]),
             nn.ReLU6(inplace=True)
         )
@@ -115,18 +115,29 @@ class SearchableMobileNetV2(nn.Module):
             LinearBottleNeck(self.stage_channels[8], self.stage_channels[9], 1, 6)
         ])
 
-        # Global pooling and final classifier
+        # Global pooling and final classifier (matching ScaleFL structure)
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        self.classifier = nn.Linear(self.stage_channels[9], num_classes)  # 320 channels
+        # Use Conv-based classifier like ScaleFL for consistency
+        self.classifier = nn.Sequential(
+            nn.Conv2d(self.stage_channels[9], self.stage_channels[9] * 4, 1),
+            nn.BatchNorm2d(self.stage_channels[9] * 4),
+            nn.ReLU6(inplace=True),
+            nn.AdaptiveAvgPool2d((1, 1)),
+            nn.Conv2d(self.stage_channels[9] * 4, num_classes, 1),
+            nn.Flatten()
+        )
 
-        # Early exit classifier if needed
+        # Early exit classifier if needed (matching ScaleFL structure)
         self.early_exit_classifier = None
         if early_exit_location is not None:
             exit_channels = self._get_channels_at_location(early_exit_location)
             self.early_exit_classifier = nn.Sequential(
+                nn.Conv2d(exit_channels, exit_channels * 4, 1),
+                nn.BatchNorm2d(exit_channels * 4),
+                nn.ReLU6(inplace=True),
                 nn.AdaptiveAvgPool2d((1, 1)),
-                nn.Flatten(),
-                nn.Linear(exit_channels, num_classes)
+                nn.Conv2d(exit_channels * 4, num_classes, 1),
+                nn.Flatten()
             )
 
         # Initialize weights
@@ -151,9 +162,9 @@ class SearchableMobileNetV2(nn.Module):
             self.stage_channels[4],  # Block 3 output: 64
             self.stage_channels[5],  # Block 4 output: 96
             self.stage_channels[6],  # Block 5 output: 160 (with multiplier[6])
-            self.stage_channels[7],  # Block 6 output: 160 (with multiplier[7])
-            self.stage_channels[8],  # Block 7 output: 160 (with multiplier[8])
-            self.stage_channels[9],  # Block 8 output: 320 (with multiplier[9])
+            self.stage_channels[6],  # Block 6 output: 160 (same as block 5, multiplier[6])
+            self.stage_channels[6],  # Block 7 output: 160 (same as block 5, multiplier[6])
+            self.stage_channels[9],  # Block 8 output: 320 (with multiplier[7])
         ]
 
         if location < len(channel_map):
@@ -173,9 +184,7 @@ class SearchableMobileNetV2(nn.Module):
                 block_idx == self.early_exit_location):
                 return [self.early_exit_classifier(x)]  # Return as list to match other models
 
-        # Final classification
-        x = self.avgpool(x)
-        x = x.view(x.size(0), -1)
+        # Final classification (classifier now handles pooling internally)
         final_output = self.classifier(x)
 
         return final_output
@@ -205,7 +214,7 @@ if __name__ == '__main__':
     # Test the searchable model
     model = searchable_mobilenet_v2(
         num_classes=100,
-        width_multipliers=[1.0] * 10,  # Max width for all 10 stages
+        width_multipliers=[1.0] * 8,  # Max width for all 8 stages
         early_exit_location=None,
         num_channels=3
     )
@@ -219,7 +228,7 @@ if __name__ == '__main__':
     # Test with early exit
     model_with_exit = searchable_mobilenet_v2(
         num_classes=100,
-        width_multipliers=[1.0] * 10,  # 10 stages: [32,16,24,32,64,96,160,160,160,320]
+        width_multipliers=[1.0] * 8,  # 8 stages: [32,16,24,32,64,96,160(x3),320]
         early_exit_location=4,
         num_channels=3
     )

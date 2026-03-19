@@ -97,12 +97,26 @@ def validate(models, val_loader, criterion, args, client_idx=0, exit_idx=0, save
     losses = [AverageMeter() for _ in range(len(models))]
     data_time = AverageMeter()
 
-    num_exits = [exit_idx if exit_idx != 0 else args.num_exits for exit_idx in exit_idxs]
+    # 动态获取每个模型的实际 exit 数量
+    # exit_idx=0 表示使用所有 exits，需要从模型获取实际数量
+    num_exits = []
+    for model_idx, model in enumerate(models):
+        exit_idx = exit_idxs[model_idx]
+        if exit_idx == 0:
+            # 使用所有 exits，从模型获取实际数量
+            if hasattr(model, 'ee_classifiers'):
+                # 计算总 exit 数量 = 所有 ee_classifiers + 1 (final classifier)
+                total_ee = sum(len(ee) for ee in model.ee_classifiers)
+                num_exits.append(total_ee + 1)
+            else:
+                num_exits.append(args.num_exits)
+        else:
+            num_exits.append(exit_idx + 1)
 
-    top1 = [[AverageMeter()] * num_exits[i] for i in range(len(models))]
-    top5 = [[AverageMeter()] * num_exits[i] for i in range(len(models))]
+    top1 = [[AverageMeter() for _ in range(num_exits[i])] for i in range(len(models))]
+    top5 = [[AverageMeter() for _ in range(num_exits[i])] for i in range(len(models))]
 
-    print(f'Validation results for Client {client_idx + 1} with Exit {exit_idxs}')
+    print(f'Validation results for Client {client_idx + 1} with Exit {exit_idxs}, num_exits={num_exits}')
 
     end = time.time()
     with torch.no_grad():

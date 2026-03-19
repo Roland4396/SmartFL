@@ -30,12 +30,24 @@ def train_supernet(args):
 
     print(f"--> Loading dataset: {args.data}")
     train_set, val_set, test_set = get_datasets(args)
-    # Use supernet-specific batch size
-    batch_size = getattr(args, 'supernet_batch_size', args.batch_size if hasattr(args, 'batch_size') else 128)
+    # Use supernet-specific batch size (increased for better GPU utilization)
+    batch_size = getattr(args, 'supernet_batch_size', args.batch_size if hasattr(args, 'batch_size') else 512)
+    print(f"--> Batch size: {batch_size}")
     train_loader, _, _ = get_dataloaders(args, batch_size, (train_set, val_set, test_set))
 
     # 2. Define the Supernet instance based on model type
-    model_type = getattr(args, 'model', 'resnet').lower()
+    # Extract model type from arch if available
+    if hasattr(args, 'arch') and args.arch:
+        if 'mobilenet' in args.arch.lower():
+            model_type = 'mobilenet'
+        elif 'resnet' in args.arch.lower():
+            model_type = 'resnet'
+        elif 'vgg' in args.arch.lower():
+            model_type = 'vgg'
+        else:
+            model_type = getattr(args, 'model', 'resnet').lower()
+    else:
+        model_type = getattr(args, 'model', 'resnet').lower()
     print(f"--> Initializing Supernet model ({model_type})...")
 
     if model_type == 'resnet':
@@ -53,7 +65,7 @@ def train_supernet(args):
     elif model_type == 'mobilenet':
         supernet = searchable_mobilenet_v2(
             num_classes=args.num_classes,
-            width_multipliers=[1.0] * 10,  # Max width for all 10 stages [32,16,24,32,64,96,160,160,160,320]
+            width_multipliers=[1.0] * 8,  # Max width for 8 stages (MobileNetV2 architecture)
             num_channels=3
         ).to(device)
     else:
@@ -72,10 +84,10 @@ def train_supernet(args):
         total_loss = 0
         for batch_idx, (inputs, targets) in enumerate(train_loader):
             inputs, targets = inputs.to(device), targets.to(device)
-            
+
             optimizer.zero_grad()
             outputs = supernet(inputs)
-            
+
             # The model might return multiple outputs from early exits,
             # but for supernet training, we only care about the final exit.
             if isinstance(outputs, list):
@@ -91,7 +103,7 @@ def train_supernet(args):
 
             if batch_idx % 100 == 0:
                 print(f"    Epoch [{epoch+1}/{args.epochs}] | Batch [{batch_idx+1}/{len(train_loader)}] | Loss: {loss.item():.4f}")
-        
+
         avg_loss = total_loss / len(train_loader)
         print(f"--> Epoch {epoch+1} finished. Average Loss: {avg_loss:.4f}")
         scheduler.step()

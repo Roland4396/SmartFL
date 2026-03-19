@@ -34,14 +34,14 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
             if model_type and metadata.get("model_type"):
                 file_model_type = metadata["model_type"]
                 if file_model_type != model_type:
-                    print(f"⚠ Warning: Config file is for {file_model_type} but loading for {model_type}")
+                    print(f"Warning: Config file is for {file_model_type} but loading for {model_type}")
                     print(f"This may cause incompatibility issues!")
 
             # Validate dataset compatibility
             if dataset and metadata.get("dataset"):
                 file_dataset = metadata["dataset"]
                 if file_dataset != dataset:
-                    print(f"⚠ Warning: Config file is for {file_dataset} but loading for {dataset}")
+                    print(f"Warning: Config file is for {file_dataset} but loading for {dataset}")
                     print(f"This may cause incompatibility issues!")
 
             # Print metadata info
@@ -126,6 +126,10 @@ def get_actual_channels(width_multipliers, model_type="resnet"):
             # VGG-D: [64, 64, 'M', 128, 128, 'M', 256, 256, 256, 'M', 512, 512, 512, 'M', 512, 512, 512]
             base_channels = [64, 64, 128, 128, 256, 256, 256, 512, 512, 512, 512, 512, 512, 4096, 4096]
         return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
+    elif model_type == "mobilenet":
+        # MobileNetV2 8 stages base channels: [32, 16, 24, 32, 64, 96, 160, 320]
+        base_channels = [32, 16, 24, 32, 64, 96, 160, 320]
+        return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
     else:
         # Fallback to resnet for unknown model types
         base_channels = [16, 32, 64]
@@ -144,7 +148,12 @@ def is_sub_model(config_sub, config_super):
     # 检查是否包含VGG特有的字段
     if 'exit_stage' in config_sub or len(config_sub['width_multipliers']) == 15:
         model_type = "vgg"
+    elif len(config_sub['width_multipliers']) == 8:
+        model_type = "mobilenet"
+    elif len(config_sub['width_multipliers']) == 3:
+        model_type = "resnet"
     else:
+        # 默认根据长度推断
         model_type = "resnet"
 
     sub_channels = get_actual_channels(config_sub['width_multipliers'], model_type)
@@ -172,6 +181,13 @@ def is_sub_model(config_sub, config_super):
 
         # 比较对应stage的channels
         for i in range(compare_stages):
+            if sub_channels[i] != super_channels[i]:
+                return False
+    elif model_type == "mobilenet":
+        # 对于MobileNet: 直接比较所有 stages 的 channels
+        # MobileNet 的 early_exit_location 对应到具体的 block
+        # 所有 8 个 stages 的 channels 都要匹配
+        for i in range(len(sub_channels)):
             if sub_channels[i] != super_channels[i]:
                 return False
     else:
@@ -365,7 +381,8 @@ def recalculate_config_metrics(config):
         from args import arg_parser, modify_args
 
         # 创建临时args对象用于模型实例化
-        temp_args = arg_parser.parse_args(['--data', 'tiny_imagenet', '--model', 'vgg', '--arch', 'vgg16_4'])
+        # TODO: 应该从调用者传递正确的dataset，现在先硬编码cifar100
+        temp_args = arg_parser.parse_args(['--data', 'cifar100', '--model', 'vgg', '--arch', 'vgg16_4'])
         temp_args = modify_args(temp_args)
 
         # 创建模型参数字典
@@ -404,6 +421,149 @@ def recalculate_config_metrics(config):
         print(f"Warning: Failed to recalculate metrics for config: {e}")
         print("Using original config with updated early_exit_location only")
         return config
+
+
+def find_growth_config_for_level(normal_config, all_configs, model_type="resnet", available_exits=None):
+    """
+    为给定的 normal 配置找到最优的生长配置。
+
+    生长配置满足：
+    1. exit 比 normal 更深
+    2. exit 必须在 available_exits 中（模型已有的 exit 位置）
+    3. width 前缀匹配（锁定部分相同）
+    4. 资源约束：冻结成本 + 训练成本 ≤ normal 的训练成本
+    5. 核范数最大
+
+    资源模型：
+    - 冻结成本 ≈ 1 × params（只需存参数）
+    - 训练成本 ≈ 4 × params（参数 + 梯度 + 优化器）
+    - normal 预算 ≈ 4 × normal_params
+
+    Args:
+        normal_config: 正常模式的配置
+        all_configs: 模型库中的所有配置
+        model_type: 模型类型 (resnet/vgg/mobilenet)
+        available_exits: 可用的 exit 位置列表（模型已有的 exit classifiers）
+
+    Returns:
+        dict: 最优的生长配置，包含额外字段：
+            - 'frozen_range': (0, normal_exit)
+            - 'active_range': (normal_exit, growth_exit)
+            - 'growth_params': 生长部分的参数量
+        或 None 如果没有可行的生长配置
+    """
+    normal_exit = normal_config['early_exit_location']
+    normal_width = normal_config['width_multipliers']
+    normal_params = normal_config['num_params']
+
+    # 计算 normal 模式的预算（3 × params，对应 SGD+Momentum: 权重+梯度+动量）
+    memory_budget = 3 * normal_params
+
+    # 确定需要锁定的 stage 数量
+    if model_type == "resnet":
+        locked_stages = get_stage_from_exit_location(normal_exit) + 1
+    elif model_type == "vgg":
+        locked_stages = get_vgg_stage_from_exit_location(normal_exit) + 1
+    else:
+        locked_stages = len(normal_width)  # 锁定全部
+
+    # 筛选候选配置
+    candidates = []
+    for config in all_configs:
+        config_exit = config['early_exit_location']
+
+        # 1. exit 必须更深
+        if config_exit <= normal_exit:
+            continue
+
+        # 2. exit 必须在 available_exits 中（如果指定了）
+        if available_exits is not None and config_exit not in available_exits:
+            continue
+
+        # 3. 前缀 width 必须匹配
+        config_width = config['width_multipliers']
+        prefix_match = True
+        for i in range(min(locked_stages, len(normal_width), len(config_width))):
+            if normal_width[i] != config_width[i]:
+                prefix_match = False
+                break
+        if not prefix_match:
+            continue
+
+        # 4. 资源约束 (SGD+Momentum: K=3)
+        # 冻结成本 = 1 × normal_params（只存权重）
+        # 训练成本 = 3 × active_params（权重+梯度+动量）
+        # 总成本 = normal_params + 3 × (config_params - normal_params)
+        #        = 3 × config_params - 2 × normal_params
+        config_params = config['num_params']
+        growth_cost = 3 * config_params - 2 * normal_params
+
+        if growth_cost > memory_budget:
+            continue
+
+        # 计算生长部分的参数量
+        growth_params = config_params - normal_params
+
+        candidates.append({
+            **config,
+            'frozen_range': (0, normal_exit),
+            'active_range': (normal_exit, config_exit),
+            'growth_params': growth_params,
+            'growth_cost': growth_cost
+        })
+
+    if not candidates:
+        return None
+
+    # 选择核范数最大的
+    best = max(candidates, key=lambda x: x['total_conv_nuclear_norm'])
+    return best
+
+
+def find_all_growth_configs(normal_configs, all_configs, model_type="resnet"):
+    """
+    为所有 level 的 normal 配置找到对应的生长配置。
+
+    Growth 配置可以选择任意可行的 exit 位置（满足资源约束和宽度前缀匹配）。
+    模型初始化时需要把这些 exit 位置也加入 ee_layer_locations。
+
+    Args:
+        normal_configs: dict, {level: normal_config}
+        all_configs: 模型库中的所有配置
+        model_type: 模型类型
+
+    Returns:
+        dict: {level: growth_config} 或 {level: None}
+    """
+    growth_configs = {}
+
+    print(f"\n{'='*60}")
+    print("TDD GROWTH CONFIG SELECTION")
+    print(f"{'='*60}")
+
+    for level in sorted(normal_configs.keys()):
+        normal_config = normal_configs[level]
+        # 不限制 available_exits，让算法自由选择最优的 exit 位置
+        growth_config = find_growth_config_for_level(
+            normal_config, all_configs, model_type, available_exits=None
+        )
+        growth_configs[level] = growth_config
+
+        if growth_config:
+            frozen_range = growth_config['frozen_range']
+            active_range = growth_config['active_range']
+            print(f"Level {level}: Normal exit={normal_config['early_exit_location']}, "
+                  f"Growth exit={growth_config['early_exit_location']}, "
+                  f"Frozen=[{frozen_range[0]},{frozen_range[1]}), "
+                  f"Active=[{active_range[0]},{active_range[1]}), "
+                  f"Growth params={growth_config['growth_params']:.0f}, "
+                  f"Nuclear norm={growth_config['total_conv_nuclear_norm']:.2f}")
+        else:
+            print(f"Level {level}: No valid growth config found (exit={normal_config['early_exit_location']})")
+
+    print(f"{'='*60}\n")
+
+    return growth_configs
 
 
 def find_best_config_independent(all_configs, participating_levels, flops_constraints=None, params_constraints=None):
@@ -531,7 +691,16 @@ def find_best_config_for_distribution(all_configs, participating_levels, beam_wi
         return None
 
     # 检测模型类型并预处理VGG配置
-    model_type = "vgg" if len(all_configs[0]['width_multipliers']) == 15 else "resnet"
+    width_len = len(all_configs[0]['width_multipliers'])
+    if width_len == 15:
+        model_type = "vgg"
+    elif width_len == 8:
+        model_type = "mobilenet"
+    elif width_len == 3:
+        model_type = "resnet"
+    else:
+        model_type = "resnet"  # 默认
+
     if model_type == "vgg":
         print("Preprocessing VGG configs: folding 15 layers to 6 stages...")
         processed_configs = preprocess_vgg_configs(all_configs)
