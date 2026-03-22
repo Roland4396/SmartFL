@@ -4,6 +4,7 @@ import copy
 import datetime as dt
 import os
 import pickle as pkl
+import time
 
 import numpy as np
 import torch
@@ -13,6 +14,7 @@ from data_tools.dataloader import get_client_dataloader
 from predict import local_validate
 from train import execute_epoch
 from utils.grad_traceback import get_downscale_index
+from utils.phase_timing import append_phase_timing_rows, phase_timing_enabled
 from utils.utils import save_checkpoint
 from time_domain_decomposition import create_tdd_components, DynamicScheduler, TimeDomainDecomposer
 from hierarchical_model_selector import (
@@ -64,11 +66,32 @@ class Federator:
             print(f"[TDD] Time-Domain Decomposition ENABLED")
             print(f"[TDD] Device-level mixing: {self.tdd_growth_ratio*100:.0f}% Growth, {(1-self.tdd_growth_ratio)*100:.0f}% Normal")
 
+    def _empty_val_results(self):
+        nan = float('nan')
+        return nan, nan, nan, np.array([nan]), np.array([nan])
+
+    def _empty_local_val_results(self):
+        nan = float('nan')
+        return [[nan, nan, nan] for _ in range(self.num_levels + 1)]
+
+    def _should_validate_round(self, args, round_idx):
+        validate_every = max(1, getattr(args, 'validate_every', 1))
+        if validate_every == 1:
+            return True
+        if round_idx == args.start_round:
+            return True
+        if round_idx == self.num_rounds - 1:
+            return True
+        return (round_idx + 1) % validate_every == 0
+
     def fed_train(self, train_set, val_set, user_groups, criterion, args, batch_size, train_params):
 
         scores = ['epoch\ttrain_loss\tval_loss\tval_acc1\tval_acc5\tlocal_val_acc1\tlocal_val_acc5' +
                   '\tlocal_val_acc1' * self.num_levels]
         best_acc1, best_round = 0.0, 0
+        last_val_results = None
+        last_local_val_results = None
+        last_validated_round = None
 
         # pre-assignment of levels to clients (needs to be saved for inference)
         if not self.client_groups:
@@ -92,9 +115,24 @@ class Federator:
             print(' | Regenerating masks for the current round... |\n')
             self.idx_dicts = [get_downscale_index(self.global_model, args, s) for s in self.vertical_scale_ratios]
 
-            train_loss, val_results, local_val_results = \
+            train_loss, val_results, local_val_results, did_validate = \
                 self.execute_round(train_set, val_set, user_groups, criterion, args, batch_size,
                                    train_params, round_idx)
+            if did_validate:
+                last_val_results = val_results
+                last_local_val_results = local_val_results
+                last_validated_round = round_idx
+            else:
+                if last_val_results is None:
+                    last_val_results = self._empty_val_results()
+                if last_local_val_results is None:
+                    last_local_val_results = self._empty_local_val_results()
+                print(
+                    f"[VALIDATION] Skipped round {round_idx}; "
+                    f"reusing metrics from round {last_validated_round if last_validated_round is not None else 'N/A'}"
+                )
+                val_results = last_val_results
+                local_val_results = last_local_val_results
 
             val_loss, val_acc1, val_acc5, _, _ = val_results
 
@@ -103,7 +141,7 @@ class Federator:
                                   local_val_results[-1][1], local_val_results[-1][2],
                                   *[l[1] for l in local_val_results[:-1]]))
 
-            is_best = val_acc1 > best_acc1
+            is_best = did_validate and val_acc1 > best_acc1
             if is_best:
                 best_acc1 = val_acc1
                 best_round = round_idx
@@ -379,25 +417,17 @@ class Federator:
             return None
 
     def execute_round(self, train_set, val_set, user_groups, criterion, args, batch_size, train_params, round_idx):
-        # DEBUG: Log round start
-        import os
-        debug_log_path = os.path.join(args.save_path, 'debug_execute_round.log')
-        with open(debug_log_path, 'a') as f:
-            f.write(f"\n{'='*80}\n")
-            f.write(f"[DEBUG execute_round] Round {round_idx} starting...\n")
-            f.write(f"  Vertical scale ratios: {self.vertical_scale_ratios}\n")
-            f.write(f"  global_model.stored_inp_kwargs id: {id(self.global_model.stored_inp_kwargs)}\n")
-            if 'scale' in self.global_model.stored_inp_kwargs:
-                f.write(f"  global_model.stored_inp_kwargs['scale']: {self.global_model.stored_inp_kwargs['scale']}\n")
-            elif 'params' in self.global_model.stored_inp_kwargs and 'scale' in self.global_model.stored_inp_kwargs['params']:
-                f.write(f"  global_model.stored_inp_kwargs['params']['scale']: {self.global_model.stored_inp_kwargs['params']['scale']}\n")
+        timing_enabled = phase_timing_enabled(args)
+        round_start = time.perf_counter()
 
         self.global_model.train()
         m = max(int(self.sample_rate * self.num_clients), 1)
         client_idxs = np.random.choice(range(self.num_clients), m, replace=False)
 
-        client_train_loaders = [get_client_dataloader(train_set, user_groups[0][client_idx], args, batch_size) for
+        client_loader_start = time.perf_counter()
+        client_train_loaders = [get_client_dataloader(train_set, user_groups[0][client_idx], args, batch_size, loader_role='train') for
                                 client_idx in client_idxs]
+        client_loader_time = time.perf_counter() - client_loader_start
         levels = [self.get_level(client_idx) for client_idx in client_idxs]
         scales = [self.vertical_scale_ratios[level] for level in levels]
         levels_in_round = [self.get_level(cid) for cid in client_idxs]
@@ -482,6 +512,7 @@ class Federator:
         tdd_frozen_blocks = []  # Track frozen block ranges for each client
         tdd_exit_indices = []  # Track exit index for each client (for training)
         tdd_is_growth = []  # Track whether each client is in Growth mode
+        local_model_build_start = time.perf_counter()
         for i in range(len(client_idxs)):
             level = levels[i]
             scale = scales[i]
@@ -539,6 +570,7 @@ class Federator:
                 tdd_is_growth.append(False)
 
             local_models.append(local_model)
+        local_model_build_time = time.perf_counter() - local_model_build_start
 
         h_scale_ratios = [self.horizontal_scale_ratios[level] for level in levels]
 
@@ -546,6 +578,9 @@ class Federator:
         local_weights = []
         local_losses = []
         local_grad_flags = []
+        client_train_total_time = 0.0
+        client_weight_upload_time = 0.0
+        client_timing_rows = []
         pool_args.append(None)
 
         for i, client_idx in enumerate(client_idxs):
@@ -562,70 +597,161 @@ class Federator:
                 h_scale_ratio_for_client = h_scale_ratios[i]
 
             client_args = pool_args + [local_models[i], client_train_loaders[i], exit_idx_for_training, scales[i], h_scale_ratio_for_client, client_idx, is_growth_mode]
+            client_train_start = time.perf_counter()
             result = execute_client_round(client_args)
+            client_train_duration = time.perf_counter() - client_train_start
+            client_train_total_time += client_train_duration
 
+            weight_upload_start = time.perf_counter()
             if args.use_gpu:
                 for k, v in result[0].items():
                     result[0][k] = v.cuda(0)
+            weight_upload_duration = time.perf_counter() - weight_upload_start
+            client_weight_upload_time += weight_upload_duration
 
             local_weights.append(result[0])
             local_grad_flags.append(result[1])
             local_losses.append(result[2])
+            if timing_enabled:
+                client_timing_rows.append([
+                    round_idx,
+                    i,
+                    client_idx,
+                    levels[i],
+                    int(is_growth_mode),
+                    client_train_duration,
+                    weight_upload_duration,
+                ])
             print(f'Client {i+1}/{len(client_idxs)} completely finished')
 
         train_loss = sum(local_losses) / len(client_idxs)
 
         # Update the global model
         # Growth 模式现在使用 get_local_split（和 Normal 模式相同），所以聚合时使用原始 levels
+        aggregate_start = time.perf_counter()
         global_weights = self.average_weights(local_weights, local_grad_flags, levels, self.global_model, args)
         self.global_model.load_state_dict(global_weights)
+        aggregate_time = time.perf_counter() - aggregate_start
 
-        # Validation for all clients
-        if self.client_split_ratios[-1] == 0:
-            level = np.where(self.client_split_ratios)[0].tolist()[-1]
-            scale = self.vertical_scale_ratios[level]
-            global_model = self.get_local_split(level, scale,participating_levels)
-            if self.use_gpu:
-                global_model = global_model.cuda()
+        did_validate = self._should_validate_round(args, round_idx)
+        validation_timing = {}
+        validate_time = 0.0
+        val_results = None
+        local_val_results = None
+        if did_validate:
+            # Validation for all clients
+            if self.client_split_ratios[-1] == 0:
+                level = np.where(self.client_split_ratios)[0].tolist()[-1]
+                scale = self.vertical_scale_ratios[level]
+                global_model = self.get_local_split(level, scale,participating_levels)
+                if self.use_gpu:
+                    global_model = global_model.cuda()
+            else:
+                global_model = copy.deepcopy(self.global_model)
+
+            validate_start = time.perf_counter()
+            validate_output = local_validate(
+                self,
+                participating_levels,
+                val_set,
+                user_groups[1],
+                criterion,
+                args,
+                512,
+                global_model,
+                return_timing=timing_enabled,
+            )
+            validate_time = time.perf_counter() - validate_start
+            if timing_enabled:
+                val_results, local_val_results, validation_timing = validate_output
+            else:
+                val_results, local_val_results = validate_output
         else:
-            global_model = copy.deepcopy(self.global_model)
+            print(
+                f"[VALIDATION] Round {round_idx} skipped "
+                f"(validate_every={max(1, getattr(args, 'validate_every', 1))})"
+            )
 
-        val_results, local_val_results = local_validate(self,participating_levels,val_set, user_groups[1], criterion, args, 512,
-                                                        global_model)
+        if timing_enabled:
+            round_total_time = time.perf_counter() - round_start
+            validation_timing = validation_timing if 'validation_timing' in locals() else {}
+            validation_loader_time = validation_timing.get('loader_s', 0.0)
+            validation_model_build_time = validation_timing.get('model_build_s', 0.0)
+            validation_single_model_time = validation_timing.get('single_model_validate_s', 0.0)
+            validation_dual_model_time = validation_timing.get('dual_model_validate_s', 0.0)
+            accounted_time = (
+                client_loader_time +
+                local_model_build_time +
+                client_train_total_time +
+                client_weight_upload_time +
+                aggregate_time +
+                validate_time
+            )
+            round_other_time = max(0.0, round_total_time - accounted_time)
+            append_phase_timing_rows(
+                args.save_path,
+                'phase_timing_rounds.tsv',
+                [
+                    'round_idx',
+                    'sampled_clients',
+                    'client_loader_s',
+                    'local_model_build_s',
+                    'client_train_total_s',
+                    'client_train_avg_s',
+                    'client_weight_upload_s',
+                    'aggregate_s',
+                    'validate_total_s',
+                    'validate_loader_s',
+                    'validate_model_build_s',
+                    'validate_single_model_s',
+                    'validate_dual_model_s',
+                    'validate_clients',
+                    'round_other_s',
+                    'round_total_s',
+                ],
+                [[
+                    round_idx,
+                    len(client_idxs),
+                    client_loader_time,
+                    local_model_build_time,
+                    client_train_total_time,
+                    client_train_total_time / max(len(client_idxs), 1),
+                    client_weight_upload_time,
+                    aggregate_time,
+                    validate_time,
+                    validation_loader_time,
+                    validation_model_build_time,
+                    validation_single_model_time,
+                    validation_dual_model_time,
+                    validation_timing.get('client_count', 0),
+                    round_other_time,
+                    round_total_time,
+                ]],
+            )
+            append_phase_timing_rows(
+                args.save_path,
+                'phase_timing_clients.tsv',
+                [
+                    'round_idx',
+                    'client_order',
+                    'client_idx',
+                    'level',
+                    'is_growth_mode',
+                    'train_s',
+                    'weight_upload_s',
+                ],
+                client_timing_rows,
+            )
+            print(
+                f"[TIMING] round={round_idx} total={round_total_time:.2f}s "
+                f"prep(loader={client_loader_time:.2f}s, model={local_model_build_time:.2f}s) "
+                f"train={client_train_total_time:.2f}s agg={aggregate_time:.2f}s "
+                f"val={validate_time:.2f}s other={round_other_time:.2f}s"
+            )
 
-        return train_loss, val_results, local_val_results
+        return train_loss, val_results, local_val_results, did_validate
 
     def average_weights(self, w, grad_flags, levels, model, args):
-        # DEBUG: Check for NaN in local weights before averaging
-        import os
-        debug_log_path = os.path.join(args.save_path, 'debug_average_weights.log')
-        os.makedirs(os.path.dirname(debug_log_path), exist_ok=True)
-
-        # Track first call to log dtype info early
-        if not hasattr(self, '_dtype_logged'):
-            self._dtype_logged = False
-
-        nan_detected_in_local = False
-        with open(debug_log_path, 'a') as f:
-            f.write(f"\n[DEBUG average_weights] Checking {len(w)} local weights from levels {levels}\n")
-            for i, local_w in enumerate(w):
-                for key, val in local_w.items():
-                    if 'num_batches_tracked' in key:
-                        continue
-                    if torch.isnan(val).any():
-                        f.write(f"  [ERROR] NaN detected in LOCAL weight {i} (level {levels[i]}), key: {key}\n")
-                        nan_detected_in_local = True
-                    elif torch.isinf(val).any():
-                        f.write(f"  [ERROR] Inf detected in LOCAL weight {i} (level {levels[i]}), key: {key}\n")
-                        nan_detected_in_local = True
-                    # Check for very large values
-                    max_val = val.abs().max().item()
-                    if max_val > 1e5:
-                        f.write(f"  [WARNING] Very large value in LOCAL weight {i} (level {levels[i]}), key: {key}, max={max_val:.2e}\n")
-
-            if not nan_detected_in_local:
-                f.write(f"  All local weights are clean (no NaN/Inf)\n")
-
         w_avg = copy.deepcopy(model.state_dict())
 
         for key in w_avg.keys():
@@ -641,131 +767,18 @@ class Federator:
             tmp = torch.zeros_like(w_avg[key])
             count = torch.zeros_like(tmp, dtype=torch.int64)
 
-            # DEBUG: Check if any client has abnormal values for THIS key
-            debug_this_key = False
             for i in range(len(w)):
-                # Skip if key doesn't exist in this client's grad_flags
-                if key not in grad_flags[i]:
-                    continue
-                if grad_flags[i][key]:
-                    if w[i][key].abs().max().item() > 1e4:  # Any client with large value
-                        debug_this_key = True
-                        break
-
-            # Force logging for first round on deep layers
-            if not self._dtype_logged and 'features.1' in key and '.weight' in key:
-                debug_this_key = True
-                self._dtype_logged = True
-                with open(debug_log_path, 'a') as f:
-                    f.write(f"\n  [FIRST ROUND DTYPE CHECK] Logging details for {key}:\n")
-                    f.write(f"    w_avg[key].shape: {w_avg[key].shape}\n")
-
-            if debug_this_key and w[0][key].abs().max().item() > 1e4:
-                with open(debug_log_path, 'a') as f:
-                    f.write(f"\n  [ALERT] Found large values in {key}, logging details:\n")
-                    f.write(f"    w_avg[key].shape: {w_avg[key].shape}\n")
-
-            # Store client info for retrospective logging
-            client_info = []
-            idx_dtypes = []  # Track idx dtypes
-            for i in range(len(w)):
-                # Skip if key doesn't exist in this client's grad_flags
                 if key not in grad_flags[i]:
                     continue
                 if grad_flags[i][key]:
                     idx = self.idx_dicts[levels[i]][key]
                     idx = self.fix_idx_array(idx, w[i][key].shape)
-                    idx_dtypes.append((i, levels[i], idx.dtype, idx.min().item(), idx.max().item()))
-                    client_max = w[i][key].abs().max().item()
-                    idx_sum = idx.sum().item()
-                    idx_numel = idx.numel()
-                    client_shape = w[i][key].shape
-                    client_info.append((i, levels[i], client_max, idx_sum, idx_numel, client_shape, True))
-
-                    # DEBUG: Log if this key needs debugging
-                    if debug_this_key:
-                        with open(debug_log_path, 'a') as f:
-                            f.write(f"    Client {i} (level {levels[i]}): w[i][key] max={client_max:.2e}, ")
-                            f.write(f"idx.sum()={idx_sum}/{idx_numel}, local shape={client_shape}\n")
-
                     tmp[idx] += w[i][key].flatten()
                     count[idx] += 1
-                else:
-                    client_info.append((i, levels[i], 0, 0, 0, None, False))
-                    if debug_this_key:
-                        with open(debug_log_path, 'a') as f:
-                            f.write(f"    Client {i} (level {levels[i]}): SKIPPED (grad_flag=False)\n")
-
-            # Store aggregation stats before assignment
-            tmp_max = tmp.abs().max().item()
-            count_max = count.max().item()
-            count_min = count.min().item()
-            count_unique = count.unique().tolist()
-            count_zero_cnt = (count == 0).sum().item()
-            w_avg_before = w_avg[key].abs().max().item()
-
-            # DEBUG: Check result if this key was flagged
-            if debug_this_key:
-                with open(debug_log_path, 'a') as f:
-                    f.write(f"    idx dtypes and ranges:\n")
-                    for ci, cl, idtype, idmin, idmax in idx_dtypes:
-                        f.write(f"      Client {ci} (level {cl}): dtype={idtype}, min={idmin}, max={idmax}\n")
-                    f.write(f"    tmp.dtype: {tmp.dtype}, count.dtype: {count.dtype}\n")
-                    f.write(f"    After aggregation: tmp max: {tmp_max:.2e}\n")
-                    f.write(f"    count: max={count_max}, min={count_min}, unique={count_unique}\n")
-                    f.write(f"    count>0 positions: {count.numel() - count_zero_cnt}/{count.numel()}\n")
-                    f.write(f"    Before assignment: w_avg[key] max: {w_avg_before:.2e}\n")
 
             w_avg[key][count != 0] = tmp[count != 0]
             count[count == 0] = 1
             w_avg[key] = w_avg[key] / count
-
-            # DEBUG: Check result if this key was flagged OR if result is large
-            final_max = w_avg[key].abs().max().item()
-            if debug_this_key or final_max > 1e4:
-                with open(debug_log_path, 'a') as f:
-                    f.write(f"    After division: w_avg[key] max: {final_max:.2e}\n")
-                    if final_max > 1e4 and not debug_this_key:
-                        # Retrospective detailed logging
-                        f.write(f"  [ALERT] {key} became large AFTER aggregation (was normal before)!\n")
-                        f.write(f"  [RETROSPECTIVE] Full aggregation details:\n")
-                        f.write(f"    w_avg[key].shape: {w_avg[key].shape}\n")
-                        f.write(f"    w_avg[key].dtype: {w_avg[key].dtype}\n")
-                        f.write(f"    tmp.dtype: {tmp.dtype}, count.dtype: {count.dtype}\n")
-                        for ci, cl, cmax, isum, inumel, cshape, participated in client_info:
-                            if participated:
-                                f.write(f"    Client {ci} (level {cl}): w[i][key] max={cmax:.2e}, ")
-                                f.write(f"idx.sum()={isum}/{inumel}, shape={cshape}\n")
-                            else:
-                                f.write(f"    Client {ci} (level {cl}): SKIPPED (grad_flag=False)\n")
-                        f.write(f"    idx dtypes and ranges:\n")
-                        for ci, cl, idtype, idmin, idmax in idx_dtypes:
-                            f.write(f"      Client {ci} (level {cl}): dtype={idtype}, min={idmin}, max={idmax}\n")
-                        f.write(f"    After aggregation: tmp max: {tmp_max:.2e}\n")
-                        f.write(f"    count: max={count_max}, min={count_min}, unique={count_unique}\n")
-                        f.write(f"    count==0 positions: {count_zero_cnt}/{count.numel()}\n")
-                        f.write(f"    Before assignment: w_avg[key] max: {w_avg_before:.2e}\n")
-
-        # DEBUG: Check for NaN in averaged weights
-        nan_detected_in_avg = False
-        with open(debug_log_path, 'a') as f:
-            f.write(f"\n  Checking averaged weights for NaN/Inf:\n")
-            for key, val in w_avg.items():
-                if 'num_batches_tracked' in key:
-                    continue
-                if torch.isnan(val).any():
-                    f.write(f"  [ERROR] NaN detected in AVERAGED weight, key: {key}\n")
-                    nan_detected_in_avg = True
-                elif torch.isinf(val).any():
-                    f.write(f"  [ERROR] Inf detected in AVERAGED weight, key: {key}\n")
-                    nan_detected_in_avg = True
-                # Check for very large values
-                max_val = val.abs().max().item()
-                if max_val > 1e5:
-                    f.write(f"  [WARNING] Very large value in AVERAGED weight, key: {key}, max={max_val:.2e}\n")
-
-            if not nan_detected_in_avg:
-                f.write(f"  All averaged weights are clean (no NaN/Inf)\n")
 
         return w_avg
 
@@ -819,29 +832,10 @@ class Federator:
         return idx_array
 
     def get_local_split(self, level, scale,participating_levels):
-        model = copy.deepcopy(self.global_model)
-
-        # DEBUG: Track stored_inp_kwargs before modification
-        import os
-        debug_log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'outputs', 'debug_get_local_split.log')
-        os.makedirs(os.path.dirname(debug_log_path), exist_ok=True)
-        with open(debug_log_path, 'a') as f:
-            f.write(f"\n[DEBUG get_local_split] Level={level}, scale={scale}\n")
-            f.write(f"  global_model.stored_inp_kwargs id: {id(self.global_model.stored_inp_kwargs)}\n")
-            if 'scale' in self.global_model.stored_inp_kwargs:
-                f.write(f"  BEFORE: global_model.stored_inp_kwargs['scale']: {self.global_model.stored_inp_kwargs['scale']}\n")
-            elif 'params' in self.global_model.stored_inp_kwargs and 'scale' in self.global_model.stored_inp_kwargs['params']:
-                f.write(f"  BEFORE: global_model.stored_inp_kwargs['params']['scale']: {self.global_model.stored_inp_kwargs['params']['scale']}\n")
-
         if scale == 1:
-            return model
+            return copy.deepcopy(self.global_model)
 
-        model_kwargs = model.stored_inp_kwargs
-        # DEBUG: Check if this is a reference or copy
-        with open(debug_log_path, 'a') as f:
-            f.write(f"  model_kwargs id: {id(model_kwargs)}\n")
-            f.write(f"  Are they same object? {id(model_kwargs) == id(self.global_model.stored_inp_kwargs)}\n")
-
+        model_kwargs = copy.deepcopy(self.global_model.stored_inp_kwargs)
         if 'scale' in model_kwargs.keys():
             model_kwargs['scale'] = scale
         else:
@@ -851,8 +845,10 @@ class Federator:
             local_model.add_exits(model_kwargs['ee_layer_locations'])
 
         local_state_dict = local_model.state_dict()
+        global_state_dict = self.global_model.state_dict()
+        level_idx_dict = self.idx_dicts[level]
 
-        for n, p in self.global_model.state_dict().items():
+        for n, p in global_state_dict.items():
 
             if 'num_batches_tracked' in n:
                 local_state_dict[n] = p
@@ -869,17 +865,10 @@ class Federator:
                 print('Models are not alignable!')
                 raise RuntimeError
 
-            idx_array = self.fix_idx_array(self.idx_dicts[level][n], local_shape)
+            idx_array = self.fix_idx_array(level_idx_dict[n], local_shape)
             local_state_dict[n] = p[idx_array].reshape(local_shape)
 
         local_model.load_state_dict(local_state_dict)
-
-        # DEBUG: Check if global model's stored_inp_kwargs was modified
-        with open(debug_log_path, 'a') as f:
-            if 'scale' in self.global_model.stored_inp_kwargs:
-                f.write(f"  AFTER: global_model.stored_inp_kwargs['scale']: {self.global_model.stored_inp_kwargs['scale']}\n")
-            elif 'params' in self.global_model.stored_inp_kwargs and 'scale' in self.global_model.stored_inp_kwargs['params']:
-                f.write(f"  AFTER: global_model.stored_inp_kwargs['params']['scale']: {self.global_model.stored_inp_kwargs['params']['scale']}\n")
 
         return local_model
 
@@ -909,10 +898,12 @@ def execute_client_round(args):
                              args, train_params, h_scale_ratio, level, global_model, is_growth_mode=is_growth_mode)
 
     print(f'Finished epochs for {client_idx}')
-    local_weights = {k: v.cpu() for k, v in local_model.state_dict(keep_vars=True).items()}
-    local_grad_flags = {k: v.grad is not None for k, v in local_model.state_dict(keep_vars=True).items()}
+    state_dict = local_model.state_dict(keep_vars=True)
+    local_weights = {k: v.detach().cpu() for k, v in state_dict.items()}
+    local_grad_flags = {k: v.grad is not None for k, v in state_dict.items()}
 
+    del state_dict
+    del optimizer
     del local_model
-    torch.cuda.empty_cache()
 
     return local_weights, local_grad_flags, loss

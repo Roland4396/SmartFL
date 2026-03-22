@@ -72,6 +72,8 @@ exp_group.add_argument('--evaluate_from', default=None, type=str, metavar='PATH'
                        help='path to saved checkpoint (default: none)')
 exp_group.add_argument('--print-freq', '-p', default=10, type=int,
                        metavar='N', help='print frequency (default: 100)')
+exp_group.add_argument('--phase_timing', action='store_true',
+                       help='record per-round phase timing breakdowns to save_path')
 exp_group.add_argument('--seed', default=0, type=int,
                        help='random seed')
 exp_group.add_argument('--gpu_idx', default=0, type=str, help='Index of available GPU')
@@ -125,6 +127,8 @@ fl_group.add_argument('--num_clients', type=int, default=100,
                       help='number of clients')
 fl_group.add_argument('--sample_rate', type=float, default=0.1,
                       help='client sample rate')
+fl_group.add_argument('--validate_every', type=int, default=1,
+                      help='run local validation every N rounds; 1 means every round')
 fl_group.add_argument('--alpha', type=int, default=100,
                       help='data nonIID alpha')
 fl_group.add_argument('-trs', '--track_running_stats', action='store_true',

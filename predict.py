@@ -13,11 +13,23 @@ import torch.nn.parallel
 import torch.optim
 
 from data_tools.dataloader import get_client_dataloader
+from utils.phase_timing import phase_timing_enabled
 from utils.utils import accuracy, AverageMeter
 from utils.utils import load_state_dict
 
 
-def local_validate(federator,participating_levels, dataset, user_groups, criterion, args, batch_size, model=None, save=False):
+def local_validate(
+        federator,
+        participating_levels,
+        dataset,
+        user_groups,
+        criterion,
+        args,
+        batch_size,
+        model=None,
+        save=False,
+        return_timing=False,
+):
     if model is None:
         load_state_dict(args, federator.global_model)
         model = federator.global_model
@@ -29,25 +41,50 @@ def local_validate(federator,participating_levels, dataset, user_groups, criteri
     result_lists = [[] for _ in range(5)]
     local_result_lists = [[[] for _ in range(3)] for _ in range(federator.num_levels + 1)]
     levels = []
+    collect_timing = return_timing or phase_timing_enabled(args)
+    timing = {
+        'total_s': 0.0,
+        'loader_s': 0.0,
+        'model_build_s': 0.0,
+        'single_model_validate_s': 0.0,
+        'dual_model_validate_s': 0.0,
+        'client_count': 0,
+        'single_model_clients': 0,
+        'dual_model_clients': 0,
+    }
+    total_start = time.perf_counter()
 
     for client_idx in range(args.num_clients):
-        client_loader = get_client_dataloader(dataset, user_groups[client_idx], args, batch_size)
+        loader_start = time.perf_counter()
+        client_loader = get_client_dataloader(dataset, user_groups[client_idx], args, batch_size, loader_role='eval')
+        if collect_timing:
+            timing['loader_s'] += time.perf_counter() - loader_start
 
         level = federator.get_level(client_idx)
         scale = federator.vertical_scale_ratios[level]
         exit_idx = federator.horizontal_scale_ratios[level]
-        local_model = federator.get_local_split(level, scale,participating_levels)
-        if args.use_gpu:
-            local_model = local_model.cuda()
 
+        validate_start = time.perf_counter()
         if level == federator.num_levels - 1:  # local and global models/results are same for highest level
             results = validate(model, client_loader, criterion, args, client_idx=client_idx, save=False)
             local_results = results
+            if collect_timing:
+                timing['single_model_validate_s'] += time.perf_counter() - validate_start
+                timing['single_model_clients'] += 1
         else:
+            model_build_start = time.perf_counter()
+            local_model = federator.get_local_split(level, scale,participating_levels)
+            if args.use_gpu:
+                local_model = local_model.cuda()
+            if collect_timing:
+                timing['model_build_s'] += time.perf_counter() - model_build_start
             local_results = validate([model, local_model], client_loader, criterion, args, client_idx=client_idx,
                                      exit_idx=[0, exit_idx], save=False)
             results = local_results[0]
             local_results = local_results[1]
+            if collect_timing:
+                timing['dual_model_validate_s'] += time.perf_counter() - validate_start
+                timing['dual_model_clients'] += 1
 
         for i in range(len(result_lists)):
             result_lists[i].append(results[i])
@@ -59,6 +96,8 @@ def local_validate(federator,participating_levels, dataset, user_groups, criteri
             local_result_lists[level][i].append(local_results[i])
 
         levels.append(level)
+        if collect_timing:
+            timing['client_count'] += 1
 
     results = [sum(result_list) / federator.num_clients for result_list in result_lists]
     local_results = []
@@ -67,20 +106,31 @@ def local_validate(federator,participating_levels, dataset, user_groups, criteri
                              local_result_list]
         local_results.append(local_result_list)
 
-    test_result_filename = os.path.join(args.save_path, 'test_scores.tsv')
-    with open(test_result_filename, 'w') as f:
+    output_handle = None
+    if save:
+        test_result_filename = os.path.join(args.save_path, 'test_scores.tsv')
+        output_handle = open(test_result_filename, 'w')
+    try:
         for j in range(federator.num_levels):
             text = f'Level {j + 1}/{federator.num_levels} * prec@1 {local_results[j][1]:.3f} prec@5 {local_results[j][2]:.3f}'
             print(text)
-            if save:
-                print(text, file=f)
+            if output_handle is not None:
+                print(text, file=output_handle)
         top1 = results[1]
         top5 = results[2]
         text = f'All clients * prec@1 {top1:.3f} prec@5 {top5:.3f}'
         print(text)
-        if save:
-            print(text, file=f)
+        if output_handle is not None:
+            print(text, file=output_handle)
+    finally:
+        if output_handle is not None:
+            output_handle.close()
 
+    if collect_timing:
+        timing['total_s'] = time.perf_counter() - total_start
+
+    if return_timing:
+        return results, local_results, timing
     return results, local_results
 
 
@@ -118,12 +168,16 @@ def validate(models, val_loader, criterion, args, client_idx=0, exit_idx=0, save
 
     print(f'Validation results for Client {client_idx + 1} with Exit {exit_idxs}, num_exits={num_exits}')
 
+    previous_modes = [model.training for model in models]
+    for model in models:
+        model.eval()
+
     end = time.time()
-    with torch.no_grad():
+    with torch.inference_mode():
         for i, (inp, target) in enumerate(val_loader):
             if args.use_gpu:
-                target = target.cuda()
-                inp = inp.cuda()
+                target = target.cuda(non_blocking=True)
+                inp = inp.cuda(non_blocking=True)
 
             data_time.update(time.time() - end)
 
@@ -169,6 +223,9 @@ def validate(models, val_loader, criterion, args, client_idx=0, exit_idx=0, save
                 text = f'Model index {model_idx} * prec@1 {top1[model_idx][-1].avg:.3f} prec@5 {top5[model_idx][-1].avg:.3f}'
                 print(text)
                 print(text, file=f)
+
+    for model, was_training in zip(models, previous_modes):
+        model.train(was_training)
 
     if len(models) == 1:
         return losses[0].avg, top1[0][-1].avg, top5[0][-1].avg, np.array([t.avg for t in top1[0]]), np.array(

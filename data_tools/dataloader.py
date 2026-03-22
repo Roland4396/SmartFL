@@ -21,6 +21,20 @@ except ImportError:
     pd = None
 
 
+def _loader_kwargs(args, loader_role):
+    kwargs = {
+        'num_workers': args.workers,
+        'pin_memory': bool(args.use_gpu),
+    }
+    if args.workers > 0:
+        kwargs['prefetch_factor'] = 4
+        if loader_role == 'train':
+            kwargs['persistent_workers'] = True
+        if os.name != 'nt':
+            kwargs['multiprocessing_context'] = 'fork'
+    return kwargs
+
+
 class TinyImageNetDataset(Dataset):
     """Custom Dataset for TinyImageNet that properly handles validation set"""
     def __init__(self, root_dir, train=True, transform=None):
@@ -252,29 +266,29 @@ def get_dataloaders(args, batch_size, dataset):
                 train_set, batch_size=batch_size,
                 sampler=torch.utils.data.sampler.SubsetRandomSampler(
                     train_indices),
-                num_workers=args.workers, pin_memory=True)
+                **_loader_kwargs(args, 'train'))
         if 'val' in args.splits:
             val_loader = torch.utils.data.DataLoader(
                 val_set, batch_size=batch_size,
                 sampler=torch.utils.data.sampler.SubsetRandomSampler(
                     val_indices),
-                num_workers=args.workers, pin_memory=True)
+                **_loader_kwargs(args, 'eval'))
         if 'test' in args.splits:
             test_loader = torch.utils.data.DataLoader(
                 test_set,
                 batch_size=batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
+                **_loader_kwargs(args, 'eval'))
     else:
         if 'train' in args.splits:
             train_loader = torch.utils.data.DataLoader(
                 train_set,
                 batch_size=batch_size, shuffle=True,
-                num_workers=args.workers, pin_memory=True)
+                **_loader_kwargs(args, 'train'))
         if 'val' or 'test' in args.splits:
             val_loader = torch.utils.data.DataLoader(
                 test_set,
                 batch_size=batch_size, shuffle=False,
-                num_workers=args.workers, pin_memory=True)
+                **_loader_kwargs(args, 'eval'))
             test_loader = val_loader
 
     if 'train' not in args.splits:
@@ -289,19 +303,26 @@ def get_dataloaders(args, batch_size, dataset):
     return train_loader, val_loader, test_loader
 
 
-def get_client_dataloader(dataset, idxs, args, batch_size):
+def get_client_dataloader(dataset, idxs, args, batch_size, loader_role='eval'):
     """
     Returns train, validation and test dataloaders for a given dataset
     and user indexes.
     """
     if 'bert' in args.arch:
-        return torch.utils.data.DataLoader(dataset, batch_size=min(batch_size, len(idxs)),
-                                           sampler=torch.utils.data.sampler.SubsetRandomSampler(idxs),
-                                           num_workers=args.workers, pin_memory=True, collate_fn=collate_fn)
-    else:
-        return torch.utils.data.DataLoader(dataset, batch_size=min(batch_size, len(idxs)),
-                                           sampler=torch.utils.data.sampler.SubsetRandomSampler(idxs),
-                                           num_workers=args.workers, pin_memory=True)
+        return torch.utils.data.DataLoader(
+            dataset,
+            batch_size=min(batch_size, len(idxs)),
+            sampler=torch.utils.data.sampler.SubsetRandomSampler(idxs),
+            collate_fn=collate_fn,
+            **_loader_kwargs(args, loader_role),
+        )
+
+    return torch.utils.data.DataLoader(
+        dataset,
+        batch_size=min(batch_size, len(idxs)),
+        sampler=torch.utils.data.sampler.SubsetRandomSampler(idxs),
+        **_loader_kwargs(args, loader_role),
+    )
 
 
 def collate_fn(data):

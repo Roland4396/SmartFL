@@ -4,8 +4,10 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import os
 import time
 import numpy as np
+import torch
 
 from utils.utils import adjust_learning_rate, accuracy, AverageMeter
 
@@ -19,25 +21,21 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
         top1.append(AverageMeter())
         top5.append(AverageMeter())
 
-    # DEBUG: Setup logging
-    import os
-    import torch
-    debug_log_path = os.path.join(args.save_path, 'debug_train.log')
+    debug_io_enabled = getattr(args, 'debug_io', 0) == 1 or os.environ.get('SMARTFL_DEBUG_IO', '0') == '1'
+    debug_log_path = os.path.join(args.save_path, 'debug_train.log') if debug_io_enabled else None
 
     # switch to train mode
     model.train()
+    adjust_learning_rate(optimizer, round, train_params)
 
     end = time.time()
 
     for i, (inp, target) in enumerate(train_loader):
-
-        adjust_learning_rate(optimizer, round, train_params)
-
         data_time.update(time.time() - end)
 
         if args.use_gpu:
-            inp = inp.cuda()
-            target = target.cuda()
+            inp = inp.cuda(non_blocking=True)
+            target = target.cuda(non_blocking=True)
 
         output = model(inp, manual_early_exit_index=h_level)
 
@@ -66,7 +64,7 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
             top5[j].update(prec5.item(), inp.size(0))
 
         # compute gradient and do SGD step
-        optimizer.zero_grad()
+        optimizer.zero_grad(set_to_none=True)
         if not is_growth_mode:
             # Normal 模式：归一化 loss（因为有多个 exit 的加权 loss）
             loss /= len(output) * (len(output) + 1) / 2
@@ -76,7 +74,11 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
         loss_value = loss.item()
         losses.update(loss_value, inp.size(0))
 
-        if loss_value > 1e5 or np.isnan(loss_value) or np.isinf(loss_value):
+        has_abnormal_loss = loss_value > 1e5 or np.isnan(loss_value) or np.isinf(loss_value)
+        if has_abnormal_loss:
+            print(f'[WARN] Abnormal loss detected at round {round}, epoch {epoch}, batch {i}: {loss_value:.6e}')
+
+        if has_abnormal_loss and debug_io_enabled:
             with open(debug_log_path, 'a') as f:
                 f.write(f"\n[ERROR] Round {round}, Epoch {epoch}, Batch {i}: Abnormal loss detected!\n")
                 f.write(f"  Loss value: {loss_value:.6e}\n")
@@ -107,7 +109,7 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
         loss.backward()
 
         # DEBUG: Check for abnormal gradients after backward
-        if loss_value > 1e5 or np.isnan(loss_value) or np.isinf(loss_value):
+        if has_abnormal_loss and debug_io_enabled:
             with open(debug_log_path, 'a') as f:
                 nan_grads = []
                 inf_grads = []
@@ -132,14 +134,6 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
                         f.write(f"    {name}: {val:.2e}\n")
 
         optimizer.step()
-
-        # DEBUG: Check model weights after optimizer step
-        with open(debug_log_path, 'a') as f:
-            for name, param in model.named_parameters():
-                if 'features.9.0.weight' in name or 'features.6.0.weight' in name or 'features.8.0.weight' in name:
-                    max_val = param.abs().max().item()
-                    if max_val > 1e4:  # Lower threshold to catch earlier signs
-                        f.write(f"[WARN] Round {round}, Epoch {epoch}, Batch {i}: {name} = {max_val:.2e}\n")
 
         # measure elapsed time
         batch_time.update(time.time() - end)
