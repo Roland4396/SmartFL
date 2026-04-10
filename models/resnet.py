@@ -9,6 +9,10 @@ from args import arg_parser, modify_args
 from models.model_utils import Scaler, conv3x3
 from hierarchical_model_selector import find_best_config_for_distribution, find_best_config_independent, load_configs_from_json, find_all_growth_configs
 
+
+def _sorted_unique_exit_locations(exit_locations):
+    return sorted(set(exit_locations))
+
 class Classifier(nn.Module):
     def __init__(self, in_planes, num_classes, num_conv_layers=3, reduction=1, scale=1.):
         super(Classifier, self).__init__()
@@ -172,28 +176,29 @@ class ResNet(nn.Module):
             ee_loc_list = [3] * (len(participating_levels) - 1) if len(participating_levels) > 1 else []
             wide_scales = [1.0] * 4  # Default 4-element multipliers for ResNet stages
         else:
-            ee_loc_list = []
+            normal_exit_locations = []
             for level in sorted(best_configs_for_round.keys()):
                 config = best_configs_for_round[level]
-                ee_loc_list.append(config['early_exit_location'])
+                normal_exit_locations.append(config['early_exit_location'])
             wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
+            ee_loc_list = normal_exit_locations[:-1]
 
             # TDD: 如果启用了 TDD，计算 Growth configs 并把它们的 exit 位置也加入
             if getattr(args, 'enable_tdd', 0) == 1:
                 growth_configs = find_all_growth_configs(
                     best_configs_for_round, all_model_configs, model_type="resnet"
                 )
+                growth_exit_locations = []
                 # 把 growth exit 位置加入 ee_loc_list
                 for level, growth_config in growth_configs.items():
                     if growth_config is not None:
-                        growth_exit = growth_config['early_exit_location']
-                        if growth_exit not in ee_loc_list:
-                            ee_loc_list.append(growth_exit)
-                # 重新排序
-                ee_loc_list = sorted(ee_loc_list)
-                print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
+                        growth_exit_locations.append(growth_config['early_exit_location'])
+                growth_exit_locations = _sorted_unique_exit_locations(growth_exit_locations)
+                ee_loc_list.extend(growth_exit_locations[:-1])
+        ee_loc_list = _sorted_unique_exit_locations(ee_loc_list)
+        if getattr(args, 'enable_tdd', 0) == 1:
+            print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
 
-        ee_loc_list=ee_loc_list[:-1]
         ee_layer_locations=ee_loc_list
         if num_classes == 200:
             factor = 4

@@ -33,20 +33,28 @@ ARCH_SPECS: dict[str, ArchSpec] = {
     "vgg16_4": ArchSpec(
         model="vgg",
         artifact_prefix="vgg",
-        flops_constraints=(285.9737, 443.4474, 513.4869, 532.48),
-        params_constraints=(5.7838, 10.154, 18.5467, 34.0154),
+        flops_constraints=(285.9, 443.4, 513.4, 532.4),
+        params_constraints=(5.806, 9.834, 18.424, 33.647),
     ),
     "mobilenet_v2_4": ArchSpec(
         model="mobilenet",
         artifact_prefix="mobilenetv2",
-        flops_constraints=(10.69, 16.47, 22.47, 27.82),
-        params_constraints=(0.393, 0.663, 1.234, 2.255),
+        flops_constraints=(10.6, 16.4, 22.4, 27.8),
+        params_constraints=(0.390, 0.677, 1.235, 2.255),
     ),
 }
 
 DEFAULT_ARCHS = list(ARCH_SPECS.keys())
 DEFAULT_DATASETS = ["cifar10", "cifar100", "tiny_imagenet"]
 DEFAULT_ALPHAS = [100]
+FULL_SWEEP_ALPHAS = [1, 100]
+DEFAULT_TDD_MODES = ["on"]
+DEFAULT_CLIENT_SPLIT_WEIGHTS = [1.0, 1.0, 1.0, 1.0]
+COMPARE_SWEEP_CLIENT_SPLIT_WEIGHTS = [4.0, 3.0, 2.0, 1.0]
+COMPARE_SWEEP_TDD_MODES = ["on", "off"]
+RESNET_COMPARE_ARCHS = ["resnet110_4"]
+RESNET_COMPARE_TDD_MODES = ["on", "off"]
+RESNET_COMPARE_CLIENT_SPLIT_WEIGHTS = [4.0, 3.0, 2.0, 1.0]
 
 
 @dataclass(frozen=True)
@@ -54,6 +62,7 @@ class Experiment:
     arch: str
     dataset: str
     alpha: int
+    tdd_mode: str
 
 
 @dataclass
@@ -72,14 +81,55 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Batch runner for TDD training on SmartFL."
     )
-    parser.add_argument("--archs", nargs="+", default=DEFAULT_ARCHS, choices=DEFAULT_ARCHS)
+    parser.add_argument(
+        "--full_sweep",
+        action="store_true",
+        help=(
+            "Run the full 4-block paper sweep: all supported backbones, all datasets, "
+            "and alphas 1 and 100."
+        ),
+    )
+    parser.add_argument(
+        "--resnet_compare_sweep",
+        action="store_true",
+        help=(
+            "Run the resnet110_4 sweep only: 3 datasets x 2 alphas (1,100) x "
+            "TDD on/off, using client split weights 4:3:2:1 by default."
+        ),
+    )
+    parser.add_argument(
+        "--compare_sweep",
+        action="store_true",
+        help=(
+            "Run the selected backbones with the comparison setup: all datasets, "
+            "alphas 1 and 100, TDD on/off, and client split weights 4:3:2:1."
+        ),
+    )
+    parser.add_argument("--archs", nargs="+", default=None, choices=DEFAULT_ARCHS)
     parser.add_argument(
         "--datasets",
         nargs="+",
-        default=DEFAULT_DATASETS,
+        default=None,
         choices=DEFAULT_DATASETS,
     )
-    parser.add_argument("--alphas", nargs="+", type=int, default=DEFAULT_ALPHAS)
+    parser.add_argument("--alphas", nargs="+", type=int, default=None)
+    parser.add_argument(
+        "--tdd_modes",
+        nargs="+",
+        default=None,
+        choices=["on", "off"],
+        help="Choose whether to run TDD-enabled jobs, TDD-disabled jobs, or both.",
+    )
+    parser.add_argument(
+        "--client_split_ratios",
+        nargs="+",
+        type=float,
+        default=None,
+        help=(
+            "Client split weights for the four complexity levels. Values are "
+            "normalized automatically, so both '4 3 2 1' and '0.4 0.3 0.2 0.1' work."
+        ),
+    )
     parser.add_argument("--num_rounds", type=int, default=400)
     parser.add_argument("--num_clients", type=int, default=100)
     parser.add_argument("--sample_rate", type=float, default=0.1)
@@ -160,11 +210,89 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Enable per-round timing breakdown logs inside each training run.",
     )
-    return parser.parse_args()
+    args = parser.parse_args()
+
+    selected_sweeps = [
+        args.full_sweep,
+        args.resnet_compare_sweep,
+        args.compare_sweep,
+    ]
+    if sum(bool(flag) for flag in selected_sweeps) > 1:
+        parser.error(
+            "--full_sweep, --resnet_compare_sweep, and --compare_sweep are mutually exclusive."
+        )
+
+    if args.full_sweep:
+        args.archs = args.archs or DEFAULT_ARCHS.copy()
+        args.datasets = args.datasets or DEFAULT_DATASETS.copy()
+        args.alphas = args.alphas or FULL_SWEEP_ALPHAS.copy()
+        args.tdd_modes = args.tdd_modes or DEFAULT_TDD_MODES.copy()
+        args.client_split_ratios = args.client_split_ratios or DEFAULT_CLIENT_SPLIT_WEIGHTS.copy()
+    elif args.resnet_compare_sweep:
+        args.archs = args.archs or RESNET_COMPARE_ARCHS.copy()
+        args.datasets = args.datasets or DEFAULT_DATASETS.copy()
+        args.alphas = args.alphas or FULL_SWEEP_ALPHAS.copy()
+        args.tdd_modes = args.tdd_modes or RESNET_COMPARE_TDD_MODES.copy()
+        args.client_split_ratios = (
+            args.client_split_ratios or RESNET_COMPARE_CLIENT_SPLIT_WEIGHTS.copy()
+        )
+    elif args.compare_sweep:
+        args.archs = args.archs or DEFAULT_ARCHS.copy()
+        args.datasets = args.datasets or DEFAULT_DATASETS.copy()
+        args.alphas = args.alphas or FULL_SWEEP_ALPHAS.copy()
+        args.tdd_modes = args.tdd_modes or COMPARE_SWEEP_TDD_MODES.copy()
+        args.client_split_ratios = (
+            args.client_split_ratios or COMPARE_SWEEP_CLIENT_SPLIT_WEIGHTS.copy()
+        )
+    else:
+        args.archs = args.archs or DEFAULT_ARCHS.copy()
+        args.datasets = args.datasets or DEFAULT_DATASETS.copy()
+        args.alphas = args.alphas or DEFAULT_ALPHAS.copy()
+        args.tdd_modes = args.tdd_modes or DEFAULT_TDD_MODES.copy()
+        args.client_split_ratios = args.client_split_ratios or DEFAULT_CLIENT_SPLIT_WEIGHTS.copy()
+
+    expected_level_counts = {
+        len(ARCH_SPECS[arch].flops_constraints)
+        for arch in args.archs
+    }
+    if len(expected_level_counts) != 1:
+        parser.error("Selected architectures must have the same number of FL levels.")
+
+    expected_levels = expected_level_counts.pop()
+    if len(args.client_split_ratios) != expected_levels:
+        parser.error(
+            f"--client_split_ratios expects {expected_levels} values for the selected architectures."
+        )
+
+    if any(value <= 0 for value in args.client_split_ratios):
+        parser.error("--client_split_ratios values must all be positive.")
+
+    ratio_sum = sum(args.client_split_ratios)
+    args.client_split_tag = "-".join(format_ratio_tag(value) for value in args.client_split_ratios)
+    args.client_split_ratios = tuple(value / ratio_sum for value in args.client_split_ratios)
+    args.tdd_modes = list(dict.fromkeys(args.tdd_modes))
+
+    return args
 
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent
+
+
+def tdd_enabled(exp: Experiment) -> bool:
+    return exp.tdd_mode == "on"
+
+
+def mode_prefix(exp: Experiment) -> str:
+    return "tdd" if tdd_enabled(exp) else "notdd"
+
+
+def format_ratio_text(value: float) -> str:
+    return f"{value:.4f}".rstrip("0").rstrip(".")
+
+
+def client_split_text(args: argparse.Namespace) -> str:
+    return ":".join(format_ratio_text(value) for value in args.client_split_ratios)
 
 
 def get_supernet_path(root: Path, exp: Experiment) -> Path:
@@ -183,11 +311,13 @@ def format_ratio_tag(value: float) -> str:
 
 
 def get_save_path(root: Path, exp: Experiment, args: argparse.Namespace) -> Path:
-    growth_tag = format_ratio_tag(args.tdd_growth_ratio)
     save_name = (
-        f"tdd_{exp.arch}_{exp.dataset}_a{exp.alpha}_s{args.seed}"
-        f"_rp{args.rotation_period}_g{growth_tag}"
+        f"{mode_prefix(exp)}_{exp.arch}_{exp.dataset}_a{exp.alpha}_s{args.seed}"
+        f"_cs{args.client_split_tag}"
     )
+    if tdd_enabled(exp):
+        growth_tag = format_ratio_tag(args.tdd_growth_ratio)
+        save_name += f"_rp{args.rotation_period}_g{growth_tag}"
     if args.run_tag:
         save_name = f"{save_name}_{args.run_tag}"
     return root / "outputs" / save_name
@@ -287,16 +417,12 @@ def build_command(
         str(args.sample_rate),
         "--validate_every",
         str(args.validate_every),
+        "--client_split_ratios",
+        *[str(v) for v in args.client_split_ratios],
         "--num_architectures",
         str(args.num_architectures),
         "--episodes_per_batch",
         str(args.episodes_per_batch),
-        "--enable_tdd",
-        "1",
-        "--rotation_period",
-        str(args.rotation_period),
-        "--tdd_growth_ratio",
-        str(args.tdd_growth_ratio),
         "--supernet_save_path",
         str(supernet_path),
         "--config_library_path",
@@ -309,6 +435,20 @@ def build_command(
         *[str(v) for v in spec.params_constraints],
         *stage_args,
     ]
+
+    if tdd_enabled(exp):
+        cmd.extend(
+            [
+                "--enable_tdd",
+                "1",
+                "--rotation_period",
+                str(args.rotation_period),
+                "--tdd_growth_ratio",
+                str(args.tdd_growth_ratio),
+            ]
+        )
+    else:
+        cmd.extend(["--enable_tdd", "0"])
 
     if args.batch_size is not None:
         cmd.extend(["-b", str(args.batch_size)])
@@ -378,9 +518,14 @@ def build_subprocess_env(args: argparse.Namespace) -> dict[str, str]:
 
 def get_run_log_path(csv_path: Path, exp: Experiment, args: argparse.Namespace) -> Path:
     log_name = (
-        f"{exp.arch}_{exp.dataset}_a{exp.alpha}_"
-        f"rp{args.rotation_period}_g{format_ratio_tag(args.tdd_growth_ratio)}.log"
+        f"{mode_prefix(exp)}_{exp.arch}_{exp.dataset}_a{exp.alpha}_"
+        f"cs{args.client_split_tag}"
     )
+    if tdd_enabled(exp):
+        log_name += (
+            f"_rp{args.rotation_period}_g{format_ratio_tag(args.tdd_growth_ratio)}"
+        )
+    log_name += ".log"
     return csv_path.parent / log_name
 
 
@@ -389,10 +534,16 @@ def collect_experiments(root: Path, args: argparse.Namespace) -> list[Experiment
     for arch in args.archs:
         for dataset in args.datasets:
             for alpha in args.alphas:
-                exp = Experiment(arch=arch, dataset=dataset, alpha=alpha)
-                if args.existing_only and not get_library_path(root, exp).exists():
-                    continue
-                experiments.append(exp)
+                for tdd_mode in args.tdd_modes:
+                    exp = Experiment(
+                        arch=arch,
+                        dataset=dataset,
+                        alpha=alpha,
+                        tdd_mode=tdd_mode,
+                    )
+                    if args.existing_only and not get_library_path(root, exp).exists():
+                        continue
+                    experiments.append(exp)
     return experiments
 
 
@@ -413,6 +564,8 @@ def write_csv_header(csv_path: Path) -> None:
                 "arch",
                 "dataset",
                 "alpha",
+                "tdd_mode",
+                "client_split_ratios",
                 "stage_plan",
                 "status",
                 "start_time",
@@ -455,6 +608,7 @@ def run_experiment(
         log_line(
             log_path,
             f"SKIP {exp.arch} {exp.dataset} alpha={exp.alpha} "
+            f"tdd={exp.tdd_mode} "
             f"(existing result: {save_path})",
         )
         append_csv_row(
@@ -463,6 +617,8 @@ def run_experiment(
                 exp.arch,
                 exp.dataset,
                 str(exp.alpha),
+                exp.tdd_mode,
+                client_split_text(args),
                 stage_plan,
                 "SKIPPED",
                 "",
@@ -483,7 +639,7 @@ def run_experiment(
     log_line(
         log_path,
         f"START {exp.arch} {exp.dataset} alpha={exp.alpha} "
-        f"stages={stage_plan}",
+        f"tdd={exp.tdd_mode} stages={stage_plan}",
     )
     log_line(log_path, f"CMD {cmd_text}")
 
@@ -494,6 +650,8 @@ def run_experiment(
                 exp.arch,
                 exp.dataset,
                 str(exp.alpha),
+                exp.tdd_mode,
+                client_split_text(args),
                 stage_plan,
                 "DRY_RUN",
                 "",
@@ -541,6 +699,7 @@ def run_experiment(
     log_line(
         log_path,
         f"{status} {exp.arch} {exp.dataset} alpha={exp.alpha} "
+        f"tdd={exp.tdd_mode} "
         f"prec1={final_prec1 or 'N/A'} duration={duration_hours:.2f}h",
     )
     append_csv_row(
@@ -549,6 +708,8 @@ def run_experiment(
             exp.arch,
             exp.dataset,
             str(exp.alpha),
+            exp.tdd_mode,
+            client_split_text(args),
             stage_plan,
             status,
             start_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -579,6 +740,7 @@ def start_experiment(
         log_line(
             log_path,
             f"SKIP {exp.arch} {exp.dataset} alpha={exp.alpha} "
+            f"tdd={exp.tdd_mode} "
             f"(existing result: {save_path})",
         )
         append_csv_row(
@@ -587,6 +749,8 @@ def start_experiment(
                 exp.arch,
                 exp.dataset,
                 str(exp.alpha),
+                exp.tdd_mode,
+                client_split_text(args),
                 stage_plan,
                 "SKIPPED",
                 "",
@@ -607,7 +771,7 @@ def start_experiment(
     log_line(
         log_path,
         f"START {exp.arch} {exp.dataset} alpha={exp.alpha} "
-        f"stages={stage_plan}",
+        f"tdd={exp.tdd_mode} stages={stage_plan}",
     )
     log_line(log_path, f"CMD {cmd_text}")
 
@@ -618,6 +782,8 @@ def start_experiment(
                 exp.arch,
                 exp.dataset,
                 str(exp.alpha),
+                exp.tdd_mode,
+                client_split_text(args),
                 stage_plan,
                 "DRY_RUN",
                 "",
@@ -656,6 +822,7 @@ def start_experiment(
 
 def finalize_experiment(
     running: RunningExperiment,
+    args: argparse.Namespace,
     csv_path: Path,
     log_path: Path,
 ) -> bool:
@@ -671,6 +838,7 @@ def finalize_experiment(
     log_line(
         log_path,
         f"{status} {running.exp.arch} {running.exp.dataset} alpha={running.exp.alpha} "
+        f"tdd={running.exp.tdd_mode} "
         f"prec1={final_prec1 or 'N/A'} duration={duration_hours:.2f}h",
     )
     append_csv_row(
@@ -679,6 +847,8 @@ def finalize_experiment(
             running.exp.arch,
             running.exp.dataset,
             str(running.exp.alpha),
+            running.exp.tdd_mode,
+            client_split_text(args),
             running.stage_plan,
             status,
             running.start_time.strftime("%Y-%m-%d %H:%M:%S"),
@@ -726,7 +896,7 @@ def run_experiments_parallel(
                 still_running.append(item)
                 continue
 
-            ok = finalize_experiment(item, csv_path, log_path)
+            ok = finalize_experiment(item, args, csv_path, log_path)
             if not ok:
                 failures += 1
         running = still_running
@@ -751,6 +921,10 @@ def main() -> int:
     log_line(log_path, f"Selected experiments: {len(experiments)}")
     log_line(
         log_path,
+        f"TDD modes: {','.join(args.tdd_modes)} | client_split={client_split_text(args)}",
+    )
+    log_line(
+        log_path,
         (
             f"Host CPUs: {os.cpu_count() or 'unknown'} | "
             f"Effective CPU/OpenMP threads per job: {args.effective_cpu_threads_per_job}"
@@ -761,7 +935,9 @@ def main() -> int:
         log_line(
             log_path,
             f"PLAN {exp.arch} {exp.dataset} alpha={exp.alpha} "
+            f"tdd={exp.tdd_mode} "
             f"stages={stage_plan} "
+            f"client_split={client_split_text(args)} "
             f"supernet={'Y' if supernet_path.exists() else 'N'} "
             f"library={'Y' if library_path.exists() else 'N'} "
             f"save={save_path}",

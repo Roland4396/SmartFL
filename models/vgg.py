@@ -61,6 +61,10 @@ cfg = {
 }
 
 
+def _sorted_unique_exit_locations(exit_locations):
+    return sorted(set(exit_locations))
+
+
 class Classifier(nn.Module):
     def __init__(self, in_planes, num_classes, num_conv_layers=3, reduction=1, scale=1.):
         super(Classifier, self).__init__()
@@ -160,28 +164,34 @@ class VGG(nn.Module):
             ee_loc_list = [12] * (len(participating_levels) - 1) if len(participating_levels) > 1 else []
             wide_scales = [1.0] * 15  # Default 15-element multipliers
         else:
-            ee_loc_list = []
+            normal_exit_locations = []
             for level in sorted(best_configs_for_round.keys()):
                 config = best_configs_for_round[level]
-                ee_loc_list.append(config['early_exit_location'])
+                normal_exit_locations.append(config['early_exit_location'])
             # Use highest level's width_multipliers (contains all actually-used stages)
             # Lower levels' width values after their early_exit are meaningless
             wide_scales = [config['width_multipliers'] for config in best_configs_for_round.values()][-1]
+            ee_loc_list = normal_exit_locations[:-1]
 
             if getattr(args, 'enable_tdd', 0) == 1:
                 growth_configs = find_all_growth_configs(
                     best_configs_for_round, all_model_configs, model_type="vgg"
                 )
+                growth_exit_locations = []
                 for growth_config in growth_configs.values():
                     if growth_config is None:
                         continue
-                    growth_exit = growth_config['early_exit_location']
-                    if growth_exit not in ee_loc_list:
-                        ee_loc_list.append(growth_exit)
-                ee_loc_list = sorted(ee_loc_list)
-                print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
+                    growth_exit_locations.append(growth_config['early_exit_location'])
+                growth_exit_locations = _sorted_unique_exit_locations(growth_exit_locations)
+                # Unlike ResNet, VGG growth exits such as 11/12 are still valid
+                # pre-classifier exit points rather than the implicit final output.
+                # Keep all discovered growth exits so growth clients do not get
+                # silently redirected to the final classifier path.
+                ee_loc_list.extend(growth_exit_locations)
+        ee_loc_list = _sorted_unique_exit_locations(ee_loc_list)
+        if getattr(args, 'enable_tdd', 0) == 1:
+            print(f"[TDD] Added growth exits, all exits: {ee_loc_list}")
         print(ee_loc_list)
-        ee_loc_list = ee_loc_list[:-1]
         ee_layer_locations = ee_loc_list
 
         print(f"[DEBUG VGG __init__] ee_layer_locations: {ee_layer_locations}")
@@ -213,6 +223,9 @@ class VGG(nn.Module):
                 )
                 # Update ee_layer_locations to use actual features indices
                 self.ee_layer_locations[i] = actual_features_idx
+        self.exit_to_classifier_idx = {
+            exit_loc: classifier_idx for classifier_idx, exit_loc in enumerate(self.ee_layer_locations)
+        }
 
         if num_channels == 3:
             dim = 4096
@@ -224,10 +237,12 @@ class VGG(nn.Module):
         self.features[-1].append(nn.Flatten(start_dim=1, end_dim=-1))
         self.features.append(nn.Sequential(
             nn.Linear(int(512 * wide_scales[12]), int(dim * wide_scales[13])),  # 13th scale for first FC
+            nn.LayerNorm(int(dim * wide_scales[13])),
             nn.ReLU(inplace=True),
             nn.Dropout()))
         self.features.append(nn.Sequential(
             nn.Linear(int(dim * wide_scales[13]), int(dim * wide_scales[14])),  # 14th scale for second FC
+            nn.LayerNorm(int(dim * wide_scales[14])),
             nn.ReLU(inplace=True),
             nn.Dropout()))
         self.classifier = nn.Linear(int(dim * wide_scales[14]), num_class)  # Final FC uses 15th scale
@@ -261,17 +276,16 @@ class VGG(nn.Module):
         for i, layer in enumerate(self.features):
             output = layer(output)
 
-            if i in self.ee_layer_locations:
-                ee_idx = self.ee_layer_locations.index(i)
-                if ee_idx < len(self.ee_classifiers):
-                    ee_out = self.ee_classifiers[ee_idx](output)
-                    ee_outs.append(ee_out)
+            ee_idx = self.exit_to_classifier_idx.get(i)
+            if ee_idx is not None and ee_idx < len(self.ee_classifiers):
+                ee_out = self.ee_classifiers[ee_idx](output)
+                ee_outs.append(ee_out)
 
-                    # Fixed: Only stop if h_level is within valid range
-                    # If h_level > num_exit_points, this is the largest model, execute all layers
-                    if manual_early_exit_index and manual_early_exit_index <= len(self.ee_layer_locations):
-                        if len(ee_outs) >= manual_early_exit_index:
-                            return ee_outs
+                # Fixed: Only stop if h_level is within valid range
+                # If h_level > num_exit_points, this is the largest model, execute all layers
+                if manual_early_exit_index and manual_early_exit_index <= len(self.ee_layer_locations):
+                    if len(ee_outs) >= manual_early_exit_index:
+                        return ee_outs
 
         # Execute all layers for largest model or when no early exit is triggered
         preds = ee_outs

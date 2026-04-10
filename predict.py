@@ -18,6 +18,25 @@ from utils.utils import accuracy, AverageMeter
 from utils.utils import load_state_dict
 
 
+def _infer_num_exits(model, args):
+    if hasattr(model, 'ee_classifiers'):
+        total_ee = 0
+        for ee in model.ee_classifiers:
+            if isinstance(ee, (torch.nn.ModuleList, list, tuple)):
+                total_ee += len(ee)
+            else:
+                total_ee += 1
+        return total_ee + 1
+
+    if hasattr(model, 'classifier') and isinstance(model.classifier, torch.nn.ModuleList):
+        return len(model.classifier)
+
+    if hasattr(model, 'ee_layer_locations'):
+        return len(model.ee_layer_locations) + 1
+
+    return args.num_exits
+
+
 def local_validate(
         federator,
         participating_levels,
@@ -152,16 +171,13 @@ def validate(models, val_loader, criterion, args, client_idx=0, exit_idx=0, save
     num_exits = []
     for model_idx, model in enumerate(models):
         exit_idx = exit_idxs[model_idx]
+        actual_num_exits = _infer_num_exits(model, args)
         if exit_idx == 0:
             # 使用所有 exits，从模型获取实际数量
-            if hasattr(model, 'ee_classifiers'):
-                # 计算总 exit 数量 = 所有 ee_classifiers + 1 (final classifier)
-                total_ee = sum(len(ee) for ee in model.ee_classifiers)
-                num_exits.append(total_ee + 1)
-            else:
-                num_exits.append(args.num_exits)
+            num_exits.append(actual_num_exits)
         else:
-            num_exits.append(exit_idx + 1)
+            # Non-zero exit_idx already means "return this many outputs".
+            num_exits.append(min(exit_idx, actual_num_exits))
 
     top1 = [[AverageMeter() for _ in range(num_exits[i])] for i in range(len(models))]
     top5 = [[AverageMeter() for _ in range(num_exits[i])] for i in range(len(models))]

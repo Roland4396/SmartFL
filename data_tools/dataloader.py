@@ -27,9 +27,13 @@ def _loader_kwargs(args, loader_role):
         'pin_memory': bool(args.use_gpu),
     }
     if args.workers > 0:
-        kwargs['prefetch_factor'] = 4
         if loader_role == 'train':
+            # Keep a deeper ready queue for training so the GPU is less likely
+            # to wait on CPU-side decode/transform work between batches.
+            kwargs['prefetch_factor'] = 8
             kwargs['persistent_workers'] = True
+        else:
+            kwargs['prefetch_factor'] = 4
         if os.name != 'nt':
             kwargs['multiprocessing_context'] = 'fork'
     return kwargs

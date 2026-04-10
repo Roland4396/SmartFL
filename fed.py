@@ -11,7 +11,7 @@ import torch
 import torch.multiprocessing as mp
 
 from data_tools.dataloader import get_client_dataloader
-from predict import local_validate
+from predict import local_validate, _infer_num_exits
 from train import execute_epoch
 from utils.grad_traceback import get_downscale_index
 from utils.phase_timing import append_phase_timing_rows, phase_timing_enabled
@@ -302,6 +302,13 @@ class Federator:
 
         return None
 
+    def _get_full_model_output_count(self, model):
+        """
+        Return the exact number of outputs produced by the full model
+        (all early exits + final classifier).
+        """
+        return _infer_num_exits(model, self.args)
+
     def _get_model_for_exit(self, exit_idx, scale):
         """
         获取指定 exit index 的模型副本。
@@ -517,6 +524,17 @@ class Federator:
             level = levels[i]
             scale = scales[i]
 
+            # Highest level always trains the full global model:
+            # no width down-scaling, no early-exit truncation, no TDD growth override.
+            if level == self.num_levels - 1:
+                local_model = copy.deepcopy(self.global_model)
+                tdd_frozen_blocks.append((0, 0))
+                tdd_exit_indices.append(self._get_full_model_output_count(local_model))
+                tdd_is_growth.append(False)
+                print(f"  [TDD] Client {i} (Level {level}): GLOBAL mode, full width, full outputs")
+                local_models.append(local_model)
+                continue
+
             if self.tdd_enabled and i in tdd_client_modes:
                 mode = tdd_client_modes[i]
 
@@ -588,9 +606,12 @@ class Federator:
             exit_idx_for_training = tdd_exit_indices[i] if tdd_exit_indices else levels[i]
             is_growth_mode = tdd_is_growth[i] if tdd_is_growth else False
 
+            # Highest level always trains the exact full model outputs.
+            if levels[i] == self.num_levels - 1:
+                h_scale_ratio_for_client = self._get_full_model_output_count(local_models[i])
             # Growth 模式下，h_scale_ratio 需要与 exit_idx_for_training 匹配
             # h_scale_ratio 表示使用多少个 exit（传给 execute_epoch 作为 h_level）
-            if is_growth_mode:
+            elif is_growth_mode:
                 # Growth 模式：exit_idx_for_training 是 0-based index，h_scale_ratio 需要 +1
                 h_scale_ratio_for_client = exit_idx_for_training + 1
             else:
