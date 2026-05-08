@@ -66,6 +66,10 @@ def get_default_config_library_path(args):
         if hasattr(args, 'arch') and args.arch:
             if 'mobilenet' in args.arch:
                 model_name = 'mobilenetv2'
+            elif 'convnext' in args.arch:
+                model_name = 'convnext'
+            elif 'vit' in args.arch:
+                model_name = 'vit_small'
             elif 'resnet' in args.arch:
                 model_name = 'resnet'
             elif 'vgg' in args.arch:
@@ -86,6 +90,10 @@ def get_default_supernet_save_path(args):
         if hasattr(args, 'arch') and args.arch:
             if 'mobilenet' in args.arch:
                 model_name = 'mobilenetv2'
+            elif 'convnext' in args.arch:
+                model_name = 'convnext'
+            elif 'vit' in args.arch:
+                model_name = 'vit_small'
             elif 'resnet' in args.arch:
                 model_name = 'resnet'
             elif 'vgg' in args.arch:
@@ -163,6 +171,10 @@ def run_stage2_ppo_generation(args):
     if hasattr(args, 'arch') and args.arch:
         if 'mobilenet' in args.arch.lower():
             model_type = 'mobilenet'
+        elif 'convnext' in args.arch.lower():
+            model_type = 'convnext'
+        elif 'vit' in args.arch.lower():
+            model_type = 'vit'
         elif 'resnet' in args.arch.lower():
             model_type = 'resnet'
         elif 'vgg' in args.arch.lower():

@@ -59,7 +59,7 @@ def measure_layer(layer, *x):
         delta_params = get_layer_param(layer)
 
     ### ops_nonlinearity
-    elif type_name in ['ReLU', 'ReLU6', 'Tanh', 'GELUActivation']:
+    elif type_name in ['ReLU', 'ReLU6', 'Tanh', 'GELUActivation', 'GELU']:
         delta_ops = x.numel()
         delta_params = get_layer_param(layer)
 
@@ -86,15 +86,16 @@ def measure_layer(layer, *x):
 
     elif type_name in ['Linear']:
         weight_ops = layer.weight.numel() * multi_add
-        bias_ops = layer.bias.numel()
-        delta_ops = x.size()[0] * (weight_ops + bias_ops)
+        bias_ops = layer.bias.numel() if layer.bias is not None else 0
+        num_instances = int(x.numel() / layer.in_features) if layer.in_features else x.size()[0]
+        delta_ops = num_instances * (weight_ops + bias_ops)
         delta_params = get_layer_param(layer)
 
     elif type_name in ['BatchNorm2d', 'BatchNorm1d', 'LayerNorm', 'Dropout2d', 'DropChannel', 'Dropout',
                        'MSDNFirstLayer', 'ConvBasic', 'ConvBN',
                        'ParallelModule', 'MSDNet', 'Sequential',
-                       'MSDNLayer', 'ConvDownNormal', 'ConvNormal', 'ClassifierModule', 'Flatten', 
-                       'Softmax', 'Identity', 'Scaler', 'Embedding']:
+                       'MSDNLayer', 'ConvDownNormal', 'ConvNormal', 'ClassifierModule', 'Flatten',
+                       'Softmax', 'Identity', 'Scaler', 'Embedding', 'GRN', 'DropPath']:
         delta_params = get_layer_param(layer)
 
     else:
@@ -102,6 +103,12 @@ def measure_layer(layer, *x):
 
     count_ops += delta_ops
     count_params += delta_params
+    if type_name == 'Conv2d' and layer.out_channels in [2, 10, 100, 200, 1000] and out_h == 1 and out_w == 1:
+        print('---------------------')
+        print('FLOPs: %.2fM, Params: %.2fM' % (count_ops / 1e6, count_params / 1e6))
+        cls_ops.append(count_ops)
+        cls_params.append(count_params)
+
     if type_name == 'Linear' and layer.out_features in [2, 10, 100, 200, 1000]:
         print('---------------------')
         print('FLOPs: %.2fM, Params: %.2fM' % (count_ops / 1e6, count_params / 1e6))

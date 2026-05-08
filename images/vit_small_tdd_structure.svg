@@ -1,0 +1,163 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1500" height="900" viewBox="0 0 1500 900">
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#263238"/>
+    </marker>
+    <marker id="arrowBlue" markerWidth="10" markerHeight="10" refX="9" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L9,3 L0,6 Z" fill="#2f65a7"/>
+    </marker>
+    <style>
+      .title { font-family: "Times New Roman", serif; font-size: 34px; font-weight: 700; fill: #16212b; }
+      .subtitle { font-family: "Times New Roman", serif; font-size: 18px; fill: #40515f; }
+      .label { font-family: "Times New Roman", serif; font-size: 20px; font-weight: 700; fill: #18232d; }
+      .small { font-family: "Times New Roman", serif; font-size: 16px; fill: #344653; }
+      .tiny { font-family: "Times New Roman", serif; font-size: 14px; fill: #344653; }
+      .note { font-family: "Times New Roman", serif; font-size: 15px; fill: #5a6975; }
+      .box { fill: #ffffff; stroke: #263238; stroke-width: 2; rx: 14; }
+      .input { fill: #f8efe1; stroke: #8c6d3f; stroke-width: 2; rx: 14; }
+      .token { fill: #e9f3ee; stroke: #4c8065; stroke-width: 2; rx: 14; }
+      .stage { fill: #eef4fb; stroke: #2f65a7; stroke-width: 2.2; rx: 18; }
+      .stageAlt { fill: #f4f8fd; stroke: #2f65a7; stroke-width: 2; rx: 12; }
+      .head { fill: #f4ece8; stroke: #9a604b; stroke-width: 2; rx: 14; }
+      .budget { fill: #fbf7e7; stroke: #aa8731; stroke-width: 2; rx: 12; }
+      .tdd { fill: #eef7f5; stroke: #2a7d74; stroke-width: 2; rx: 14; }
+      .search { fill: #f7eef8; stroke: #8b5b91; stroke-width: 2; rx: 14; }
+      .arrow { stroke: #263238; stroke-width: 2.4; fill: none; marker-end: url(#arrow); }
+      .arrowBlue { stroke: #2f65a7; stroke-width: 2.2; fill: none; marker-end: url(#arrowBlue); }
+      .dash { stroke: #657887; stroke-width: 2; stroke-dasharray: 7 6; fill: none; marker-end: url(#arrow); }
+      .divider { stroke: #b7c3cc; stroke-width: 1.4; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1500" height="900" fill="#fbfaf7"/>
+
+  <text x="70" y="64" class="title">AlignFL-TDD 中的 ViT-Small 骨干网络</text>
+  <text x="70" y="96" class="subtitle">主特征维度固定为 384；结构搜索只改变前馈层隐藏宽度和早退出口深度。</text>
+
+  <rect x="55" y="128" width="1390" height="350" class="box"/>
+  <text x="80" y="166" class="label">标准前向路径</text>
+  <text x="80" y="193" class="note">ViT-Small：图像块大小为 16，共 12 个 Transformer 块，分成 4 个阶段，每阶段 3 个块。</text>
+
+  <rect x="85" y="245" width="135" height="90" class="input"/>
+  <text x="112" y="279" class="label">输入图像</text>
+  <text x="108" y="306" class="small">224 × 224</text>
+  <text x="115" y="327" class="tiny">三通道输入</text>
+
+  <path d="M220 290 L278 290" class="arrow"/>
+
+  <rect x="278" y="245" width="150" height="90" class="token"/>
+  <text x="302" y="275" class="label">图像分块</text>
+  <text x="301" y="300" class="small">16 × 16 切分</text>
+  <text x="300" y="323" class="tiny">线性映射</text>
+
+  <path d="M428 290 L487 290" class="arrow"/>
+
+  <rect x="487" y="245" width="165" height="90" class="token"/>
+  <text x="514" y="275" class="label">标记序列</text>
+  <text x="510" y="300" class="small">分类标记</text>
+  <text x="510" y="323" class="tiny">位置编码</text>
+
+  <path d="M652 290 L710 290" class="arrow"/>
+
+  <rect x="710" y="205" width="148" height="170" class="stage"/>
+  <text x="744" y="236" class="label">阶段 1</text>
+  <line x1="730" y1="251" x2="838" y2="251" class="divider"/>
+  <text x="738" y="278" class="small">第 1-3 块</text>
+  <text x="735" y="305" class="tiny">自注意力</text>
+  <text x="735" y="326" class="tiny">前馈层宽度</text>
+  <text x="735" y="347" class="tiny">由 w1 控制</text>
+
+  <path d="M858 290 L895 290" class="arrow"/>
+
+  <rect x="895" y="205" width="148" height="170" class="stage"/>
+  <text x="929" y="236" class="label">阶段 2</text>
+  <line x1="915" y1="251" x2="1023" y2="251" class="divider"/>
+  <text x="923" y="278" class="small">第 4-6 块</text>
+  <text x="920" y="305" class="tiny">自注意力</text>
+  <text x="920" y="326" class="tiny">前馈层宽度</text>
+  <text x="920" y="347" class="tiny">由 w2 控制</text>
+
+  <path d="M1043 290 L1080 290" class="arrow"/>
+
+  <rect x="1080" y="205" width="148" height="170" class="stage"/>
+  <text x="1114" y="236" class="label">阶段 3</text>
+  <line x1="1100" y1="251" x2="1208" y2="251" class="divider"/>
+  <text x="1108" y="278" class="small">第 7-9 块</text>
+  <text x="1105" y="305" class="tiny">自注意力</text>
+  <text x="1105" y="326" class="tiny">前馈层宽度</text>
+  <text x="1105" y="347" class="tiny">由 w3 控制</text>
+
+  <path d="M1228 290 L1265 290" class="arrow"/>
+
+  <rect x="1265" y="205" width="148" height="170" class="stage"/>
+  <text x="1299" y="236" class="label">阶段 4</text>
+  <line x1="1285" y1="251" x2="1393" y2="251" class="divider"/>
+  <text x="1290" y="278" class="small">第 10-12 块</text>
+  <text x="1290" y="305" class="tiny">自注意力</text>
+  <text x="1290" y="326" class="tiny">前馈层宽度</text>
+  <text x="1290" y="347" class="tiny">由 w4 控制</text>
+
+  <rect x="1018" y="410" width="225" height="42" class="head"/>
+  <text x="1042" y="437" class="small">可在第 3-12 块后设置早退出口</text>
+  <path d="M784 375 C820 435, 930 438, 1018 431" class="dash"/>
+  <path d="M969 375 C995 420, 1035 431, 1018 431" class="dash"/>
+  <path d="M1154 375 C1160 415, 1135 425, 1128 431" class="dash"/>
+  <path d="M1339 375 C1305 420, 1235 430, 1243 431" class="dash"/>
+
+  <rect x="1275" y="410" width="140" height="42" class="head"/>
+  <text x="1302" y="437" class="small">最终分类头</text>
+  <path d="M1339 375 L1345 410" class="arrow"/>
+
+  <rect x="55" y="515" width="670" height="305" class="box"/>
+  <text x="80" y="552" class="label">第二阶段使用的结构搜索空间</text>
+
+  <rect x="85" y="585" width="285" height="182" class="search"/>
+  <text x="105" y="619" class="label">宽度搜索</text>
+  <text x="105" y="650" class="small">搜索变量：[w1, w2, w3, w4]</text>
+  <text x="105" y="679" class="small">作用于前馈层隐藏维度</text>
+  <text x="105" y="708" class="small">主特征维度保持 384 不变</text>
+  <text x="105" y="737" class="small">候选比例：1/8 到 1</text>
+
+  <rect x="405" y="585" width="285" height="182" class="search"/>
+  <text x="425" y="619" class="label">深度搜索</text>
+  <text x="425" y="650" class="small">搜索变量：早退出口位置</text>
+  <text x="425" y="679" class="small">候选出口：第 3 到 12 块</text>
+  <text x="425" y="708" class="small">评价对象：标记表示</text>
+  <text x="425" y="737" class="small">评价指标：核范数</text>
+
+  <rect x="770" y="515" width="675" height="305" class="box"/>
+  <text x="795" y="552" class="label">四级异构客户端部署</text>
+
+  <rect x="805" y="592" width="135" height="120" class="budget"/>
+  <text x="838" y="624" class="label">等级 1</text>
+  <text x="828" y="654" class="small">弱客户端</text>
+  <text x="823" y="683" class="small">约 1/8 预算</text>
+
+  <rect x="970" y="592" width="135" height="120" class="budget"/>
+  <text x="1003" y="624" class="label">等级 2</text>
+  <text x="993" y="654" class="small">小客户端</text>
+  <text x="988" y="683" class="small">约 1/4 预算</text>
+
+  <rect x="1135" y="592" width="135" height="120" class="budget"/>
+  <text x="1168" y="624" class="label">等级 3</text>
+  <text x="1160" y="654" class="small">中等客户端</text>
+  <text x="1153" y="683" class="small">约 1/2 预算</text>
+
+  <rect x="1300" y="592" width="110" height="120" class="budget"/>
+  <text x="1325" y="624" class="label">等级 4</text>
+  <text x="1325" y="654" class="small">完整模型</text>
+  <text x="1320" y="683" class="small">1 倍预算</text>
+
+  <path d="M940 652 L970 652" class="arrow"/>
+  <path d="M1105 652 L1135 652" class="arrow"/>
+  <path d="M1270 652 L1300 652" class="arrow"/>
+
+  <rect x="805" y="742" width="605" height="50" class="tdd"/>
+  <text x="828" y="773" class="small">TDD 增长关系：在同一个模型库和预算约束下，从较小模型训练并逐步增长到相邻较大模型。</text>
+  <path d="M872 712 L872 742" class="arrowBlue"/>
+  <path d="M1037 712 L1037 742" class="arrowBlue"/>
+  <path d="M1202 712 L1202 742" class="arrowBlue"/>
+  <path d="M1355 712 L1355 742" class="arrowBlue"/>
+
+  <text x="70" y="860" class="note">图注：该图对应实验中的 ViT-Small 分支；标记维度固定，搜索前馈层隐藏宽度和出口深度。</text>
+</svg>

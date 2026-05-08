@@ -25,11 +25,21 @@ def modify_args(args):
     else:
         raise NotImplementedError
 
+    if (
+        (hasattr(args, 'arch') and args.arch and 'vit' in args.arch.lower())
+        or (hasattr(args, 'model') and args.model and args.model.lower() == 'vit')
+    ):
+        args.image_size = (224, 224)
+
     if not hasattr(args, "save_path") or args.save_path is None:
         # Extract model name from arch (e.g., 'mobilenet_v2_4' -> 'mobilenet')
         if hasattr(args, 'arch') and args.arch:
             if 'mobilenet' in args.arch:
                 model_name = 'mobilenet'
+            elif 'convnext' in args.arch:
+                model_name = 'convnext'
+            elif 'vit' in args.arch:
+                model_name = 'vit_small'
             elif 'resnet' in args.arch:
                 model_name = 'resnet'
             elif 'vgg' in args.arch:
@@ -54,7 +64,10 @@ def modify_args(args):
 model_names = ['msdnet24_1', 'msdnet24_4',
                'resnet110_1', 'resnet110_4',
                'vgg16_1', 'vgg16_4',
-               'mobilenet_v2_1', 'mobilenet_v2_4']
+               'mobilenet_v2_1', 'mobilenet_v2_4',
+               'convnext_1', 'convnext_4',
+               'vit_small_1', 'vit_small_4',
+               'vit_tiny_1', 'vit_tiny_4']
 
 arg_parser = argparse.ArgumentParser(
     description='Image classification PK main script')
@@ -95,7 +108,7 @@ data_group.add_argument('-jj', '--num_fed_workers', default=1, type=int, metavar
 # model arch related
 arch_group = arg_parser.add_argument_group('arch', 'model architecture setting')
 arch_group.add_argument('--model', metavar='MODEL', default='resnet',
-                        choices=['resnet', 'vgg', 'mobilenet'],
+                        choices=['resnet', 'vgg', 'mobilenet', 'convnext', 'vit'],
                         help='model type to use (default: resnet)')
 arch_group.add_argument('--arch', '-a', metavar='ARCH', default='resnet110_4',
                         type=str, choices=model_names,
@@ -150,7 +163,8 @@ tdd_group.add_argument('--rotation_period', type=int, default=10,
                        help='Rotation period for TDD in rounds (default: 10)')
 tdd_group.add_argument('--tdd_growth_ratio', type=float, default=0.5,
                        help='Ratio of devices using Growth mode vs Normal mode (default: 0.5)')
-
+tdd_group.add_argument('--tdd_growth_budget_scale', type=float, default=1.0,
+                       help='Allowed Growth memory budget relative to normal training budget (default: 1.0)')
 # Three-stage pipeline control
 pipeline_group = arg_parser.add_argument_group('pipeline', 'Three-stage pipeline control')
 pipeline_group.add_argument('--skip_stage1', action='store_true',

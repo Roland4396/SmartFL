@@ -92,12 +92,15 @@ def calculate_total_conv_nuclear_norm(model: nn.Module, early_exit_location: Opt
     # Calculate target conv layer count based on early_exit_location
     target_conv_layers = None
     if early_exit_location is not None:
-        # For SearchableResNet: each BasicBlock has 2 conv layers + 1 initial conv1
-        # early_exit_location is the block index where we exit (0-based)
-        # So we need to include conv layers up to and INCLUDING that block:
-        # - conv1 (initial): 1 layer  
-        # - Blocks 0 to early_exit_location (inclusive): each block has 2 conv layers
-        target_conv_layers = 1 + ((early_exit_location + 1) * 2)  # +1 because we include the exit block
+        if hasattr(model, 'get_conv_layer_cutoff'):
+            target_conv_layers = model.get_conv_layer_cutoff(early_exit_location)
+        else:
+            # For SearchableResNet: each BasicBlock has 2 conv layers + 1 initial conv1
+            # early_exit_location is the block index where we exit (0-based)
+            # So we need to include conv layers up to and INCLUDING that block:
+            # - conv1 (initial): 1 layer
+            # - Blocks 0 to early_exit_location (inclusive): each block has 2 conv layers
+            target_conv_layers = 1 + ((early_exit_location + 1) * 2)  # +1 because we include the exit block
     
     conv_layer_count = 0
     for name, module in model.named_modules():
@@ -135,6 +138,44 @@ def calculate_total_conv_nuclear_norm(model: nn.Module, early_exit_location: Opt
     return total_nuclear_norm
 
 
+def calculate_total_weight_nuclear_norm(model: nn.Module, early_exit_location: Optional[int] = None) -> float:
+    """
+    Calculate nuclear norm over backbone Conv2d/Linear weight matrices.
+
+    Models can expose iter_nuclear_norm_modules(early_exit_location) to define
+    the exact backbone prefix. This is used for ViT, where most capacity lives
+    in Linear projection matrices rather than convolution kernels.
+    """
+    model.eval()
+    total_nuclear_norm = 0.0
+
+    if hasattr(model, "iter_nuclear_norm_modules"):
+        modules = model.iter_nuclear_norm_modules(early_exit_location)
+    else:
+        modules = (
+            module
+            for module in model.modules()
+            if isinstance(module, (nn.Conv2d, nn.Linear))
+        )
+
+    for module in modules:
+        if not isinstance(module, (nn.Conv2d, nn.Linear)):
+            continue
+        weight = module.weight.data
+        weight_2d = weight.view(weight.size(0), -1)
+        try:
+            _, singular_values, _ = torch.linalg.svd(weight_2d, full_matrices=False)
+            total_nuclear_norm += torch.sum(singular_values).item()
+        except Exception as e:
+            print(f"Warning: SVD failed for layer {module.__class__.__name__}: {e}")
+            try:
+                total_nuclear_norm += torch.norm(weight_2d, p='fro').item()
+            except Exception as e2:
+                print(f"  Both SVD and Frobenius norm failed: {e2}")
+
+    return total_nuclear_norm
+
+
 def calculate_model_size(model: nn.Module, early_exit_location: Optional[int] = None) -> int:
     """
     Calculate the total number of parameters in the model up to a given early exit location.
@@ -153,6 +194,9 @@ def calculate_model_size(model: nn.Module, early_exit_location: Optional[int] = 
 
     model.eval()
     total_params = 0
+
+    if hasattr(model, 'count_params_to_exit'):
+        return model.count_params_to_exit(early_exit_location)
 
     # Detect model type
     model_class_name = model.__class__.__name__

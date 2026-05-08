@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
 import os
 import re
 import subprocess
@@ -42,9 +43,27 @@ ARCH_SPECS: dict[str, ArchSpec] = {
         flops_constraints=(10.6, 16.4, 22.4, 27.8),
         params_constraints=(0.390, 0.677, 1.235, 2.255),
     ),
+    "convnext_4": ArchSpec(
+        model="convnext",
+        artifact_prefix="convnext",
+        flops_constraints=(3.5, 7.0, 14.0, 28.0),
+        params_constraints=(1.07, 2.14, 4.28, 8.56),
+    ),
+    "vit_small_4": ArchSpec(
+        model="vit",
+        artifact_prefix="vit_small",
+        flops_constraints=(13.5, 26.9, 53.8, 107.7),
+        params_constraints=(2.700, 5.399, 10.798, 21.596),
+    ),
+    "vit_tiny_4": ArchSpec(
+        model="vit",
+        artifact_prefix="vit_small",
+        flops_constraints=(13.5, 26.9, 53.8, 107.7),
+        params_constraints=(2.700, 5.399, 10.798, 21.596),
+    ),
 }
 
-DEFAULT_ARCHS = list(ARCH_SPECS.keys())
+DEFAULT_ARCHS = [arch for arch in ARCH_SPECS.keys() if arch != "vit_tiny_4"]
 DEFAULT_DATASETS = ["cifar10", "cifar100", "tiny_imagenet"]
 DEFAULT_ALPHAS = [100]
 FULL_SWEEP_ALPHAS = [1, 100]
@@ -63,6 +82,12 @@ class Experiment:
     dataset: str
     alpha: int
     tdd_mode: str
+
+
+@dataclass(frozen=True)
+class ArtifactPreparation:
+    arch: str
+    dataset: str
 
 
 @dataclass
@@ -295,14 +320,22 @@ def client_split_text(args: argparse.Namespace) -> str:
     return ":".join(format_ratio_text(value) for value in args.client_split_ratios)
 
 
+def get_artifact_paths(root: Path, arch: str, dataset: str) -> tuple[Path, Path]:
+    prefix = ARCH_SPECS[arch].artifact_prefix
+    return (
+        root / f"{prefix}_{dataset}_supernet.pth",
+        root / f"{prefix}_{dataset}_architecture_library.json",
+    )
+
+
 def get_supernet_path(root: Path, exp: Experiment) -> Path:
-    prefix = ARCH_SPECS[exp.arch].artifact_prefix
-    return root / f"{prefix}_{exp.dataset}_supernet.pth"
+    supernet_path, _ = get_artifact_paths(root, exp.arch, exp.dataset)
+    return supernet_path
 
 
 def get_library_path(root: Path, exp: Experiment) -> Path:
-    prefix = ARCH_SPECS[exp.arch].artifact_prefix
-    return root / f"{prefix}_{exp.dataset}_architecture_library.json"
+    _, library_path = get_artifact_paths(root, exp.arch, exp.dataset)
+    return library_path
 
 
 def format_ratio_tag(value: float) -> str:
@@ -373,8 +406,38 @@ def completed_run(save_path: Path, num_rounds: int) -> bool:
     return False
 
 
-def determine_stage_plan(supernet_path: Path, library_path: Path) -> tuple[str, list[str]]:
-    if library_path.exists():
+def library_ready_for_arch(library_path: Path, arch: str) -> bool:
+    if not library_path.exists():
+        return False
+
+    if arch not in {"vit_small_4", "vit_tiny_4"}:
+        return True
+
+    try:
+        data = json.loads(library_path.read_text(encoding="utf-8"))
+    except Exception:
+        return False
+
+    metadata = data.get("metadata", {}) if isinstance(data, dict) else {}
+    configs = data.get("configurations", []) if isinstance(data, dict) else data
+    if metadata.get("model_type") != "vit":
+        return False
+    if not configs:
+        return False
+    if metadata.get("architecture_space") != "vit_stage_mlp_width":
+        return False
+    return any(len(cfg.get("width_multipliers", [])) == 4 for cfg in configs)
+
+
+def determine_stage_plan(
+    supernet_path: Path,
+    library_path: Path,
+    arch: str,
+    force_stage3: bool = False,
+) -> tuple[str, list[str]]:
+    if force_stage3:
+        return "3", ["--skip_stage1", "--skip_stage2", "--stages_only", "3"]
+    if library_ready_for_arch(library_path, arch):
         return "3", ["--skip_stage1", "--skip_stage2", "--stages_only", "3"]
     if supernet_path.exists():
         return "2,3", ["--skip_stage1", "--stages_only", "2,3"]
@@ -385,12 +448,18 @@ def build_command(
     root: Path,
     exp: Experiment,
     args: argparse.Namespace,
+    force_stage3: bool = False,
 ) -> tuple[list[str], Path, Path, Path, str]:
     spec = ARCH_SPECS[exp.arch]
     supernet_path = get_supernet_path(root, exp)
     library_path = get_library_path(root, exp)
     save_path = get_save_path(root, exp, args)
-    stage_plan, stage_args = determine_stage_plan(supernet_path, library_path)
+    stage_plan, stage_args = determine_stage_plan(
+        supernet_path,
+        library_path,
+        exp.arch,
+        force_stage3=force_stage3,
+    )
 
     cmd = [
         sys.executable,
@@ -470,6 +539,71 @@ def build_command(
     return cmd, supernet_path, library_path, save_path, stage_plan
 
 
+def collect_artifact_preparations(experiments: list[Experiment]) -> list[ArtifactPreparation]:
+    preparations: list[ArtifactPreparation] = []
+    seen: set[tuple[str, str]] = set()
+    for exp in experiments:
+        key = (exp.arch, exp.dataset)
+        if key in seen:
+            continue
+        seen.add(key)
+        preparations.append(ArtifactPreparation(arch=exp.arch, dataset=exp.dataset))
+    return preparations
+
+
+def determine_preparation_stage_plan(
+    supernet_path: Path,
+    library_path: Path,
+    arch: str,
+) -> tuple[str, list[str]]:
+    if library_ready_for_arch(library_path, arch):
+        return "skip", []
+    if supernet_path.exists():
+        return "2", ["--skip_stage1", "--stages_only", "2"]
+    return "1,2", ["--stages_only", "1,2"]
+
+
+def build_preparation_command(
+    root: Path,
+    prep: ArtifactPreparation,
+    args: argparse.Namespace,
+) -> tuple[list[str], Path, Path, str]:
+    spec = ARCH_SPECS[prep.arch]
+    supernet_path, library_path = get_artifact_paths(root, prep.arch, prep.dataset)
+    stage_plan, stage_args = determine_preparation_stage_plan(supernet_path, library_path, prep.arch)
+
+    cmd = [
+        sys.executable,
+        "main.py",
+        "--arch",
+        prep.arch,
+        "--model",
+        spec.model,
+        "--data",
+        prep.dataset,
+        "--seed",
+        str(args.seed),
+        "--gpu_idx",
+        args.gpu_idx,
+        "--use_gpu",
+        str(args.use_gpu),
+        "--num_architectures",
+        str(args.num_architectures),
+        "--episodes_per_batch",
+        str(args.episodes_per_batch),
+        "--supernet_save_path",
+        str(supernet_path),
+        "--config_library_path",
+        str(library_path),
+        *stage_args,
+    ]
+
+    if args.workers is not None:
+        cmd.extend(["-j", str(args.workers)])
+
+    return cmd, supernet_path, library_path, stage_plan
+
+
 def parse_test_score(test_score_path: Path) -> str:
     if not test_score_path.exists():
         return ""
@@ -527,6 +661,14 @@ def get_run_log_path(csv_path: Path, exp: Experiment, args: argparse.Namespace) 
         )
     log_name += ".log"
     return csv_path.parent / log_name
+
+
+def get_preparation_log_path(csv_path: Path, prep: ArtifactPreparation) -> Path:
+    return csv_path.parent / f"prep_{prep.arch}_{prep.dataset}.log"
+
+
+def experiment_group_key(exp: Experiment) -> tuple[str, str]:
+    return exp.arch, exp.dataset
 
 
 def collect_experiments(root: Path, args: argparse.Namespace) -> list[Experiment]:
@@ -593,14 +735,115 @@ def log_line(log_path: Path, text: str) -> None:
         f.write(line + "\n")
 
 
+def run_preparation(
+    root: Path,
+    prep: ArtifactPreparation,
+    args: argparse.Namespace,
+    csv_path: Path,
+    log_path: Path,
+) -> bool:
+    cmd, supernet_path, library_path, stage_plan = build_preparation_command(root, prep, args)
+
+    if stage_plan == "skip":
+        log_line(
+            log_path,
+            f"PREP SKIP {prep.arch} {prep.dataset} "
+            f"(supernet={'Y' if supernet_path.exists() else 'N'} "
+            f"library={'Y' if library_path.exists() else 'N'})",
+        )
+        return True
+
+    cmd_text = print_command(cmd)
+    run_log_path = get_preparation_log_path(csv_path, prep)
+
+    log_line(log_path, f"PREP START {prep.arch} {prep.dataset} stages={stage_plan}")
+    log_line(log_path, f"PREP CMD {cmd_text}")
+
+    if args.dry_run:
+        return True
+
+    start_time = datetime.now()
+    status = "SUCCESS"
+
+    with run_log_path.open("w", encoding="utf-8") as run_log:
+        process = subprocess.Popen(
+            cmd,
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            env=build_subprocess_env(args),
+            text=True,
+            bufsize=1,
+        )
+
+        assert process.stdout is not None
+        for line in process.stdout:
+            print(line, end="")
+            run_log.write(line)
+            run_log.flush()
+
+        return_code = process.wait()
+        if return_code != 0:
+            status = "FAILED"
+
+    duration_hours = (datetime.now() - start_time).total_seconds() / 3600.0
+    log_line(
+        log_path,
+        f"PREP {status} {prep.arch} {prep.dataset} stages={stage_plan} "
+        f"duration={duration_hours:.2f}h",
+    )
+    return status == "SUCCESS"
+
+
+def prepare_artifacts(
+    root: Path,
+    experiments: list[Experiment],
+    args: argparse.Namespace,
+    csv_path: Path,
+    log_path: Path,
+) -> int:
+    failures = 0
+    preparations = collect_artifact_preparations(experiments)
+    log_line(log_path, f"Artifact preparation groups: {len(preparations)}")
+
+    for prep in preparations:
+        cmd, supernet_path, library_path, stage_plan = build_preparation_command(root, prep, args)
+        log_line(
+            log_path,
+            f"PREP PLAN {prep.arch} {prep.dataset} "
+            f"stages={stage_plan} "
+            f"supernet={'Y' if supernet_path.exists() else 'N'} "
+            f"library={'Y' if library_path.exists() else 'N'}",
+        )
+        if args.dry_run and stage_plan != "skip":
+            log_line(log_path, f"PREP PLAN CMD {print_command(cmd)}")
+
+    for index, prep in enumerate(preparations, start=1):
+        log_line(log_path, f"PREP QUEUE [{index}/{len(preparations)}] {prep}")
+        ok = run_preparation(root, prep, args, csv_path, log_path)
+        if not ok:
+            failures += 1
+            break
+        if not args.dry_run and index < len(preparations):
+            time.sleep(2)
+
+    return failures
+
+
 def run_experiment(
     root: Path,
     exp: Experiment,
     args: argparse.Namespace,
     csv_path: Path,
     log_path: Path,
+    force_stage3: bool = False,
 ) -> bool:
-    cmd, supernet_path, library_path, save_path, stage_plan = build_command(root, exp, args)
+    cmd, supernet_path, library_path, save_path, stage_plan = build_command(
+        root,
+        exp,
+        args,
+        force_stage3=force_stage3,
+    )
     test_score_path = save_path / "test_scores.tsv"
 
     if completed_run(save_path, args.num_rounds) and not args.rerun:
@@ -731,8 +974,14 @@ def start_experiment(
     args: argparse.Namespace,
     csv_path: Path,
     log_path: Path,
+    force_stage3: bool = False,
 ) -> RunningExperiment | None:
-    cmd, supernet_path, library_path, save_path, stage_plan = build_command(root, exp, args)
+    cmd, supernet_path, library_path, save_path, stage_plan = build_command(
+        root,
+        exp,
+        args,
+        force_stage3=force_stage3,
+    )
     test_score_path = save_path / "test_scores.tsv"
 
     if completed_run(save_path, args.num_rounds) and not args.rerun:
@@ -870,20 +1119,39 @@ def run_experiments_parallel(
     args: argparse.Namespace,
     csv_path: Path,
     log_path: Path,
+    force_stage3: bool = False,
 ) -> int:
     failures = 0
     running: list[RunningExperiment] = []
-    next_index = 0
+    pending = experiments.copy()
+    started_count = 0
 
-    while next_index < len(experiments) or running:
-        while next_index < len(experiments) and len(running) < args.max_parallel:
-            exp = experiments[next_index]
-            next_index += 1
-            log_line(log_path, f"QUEUE [{next_index}/{len(experiments)}] {exp}")
-            launched = start_experiment(root, exp, args, csv_path, log_path)
+    while pending or running:
+        while pending and len(running) < args.max_parallel:
+            active_keys = {experiment_group_key(item.exp) for item in running}
+            launch_index = None
+            for idx, exp in enumerate(pending):
+                if experiment_group_key(exp) not in active_keys:
+                    launch_index = idx
+                    break
+
+            if launch_index is None:
+                break
+
+            exp = pending.pop(launch_index)
+            started_count += 1
+            log_line(log_path, f"QUEUE [{started_count}/{len(experiments)}] {exp}")
+            launched = start_experiment(
+                root,
+                exp,
+                args,
+                csv_path,
+                log_path,
+                force_stage3=force_stage3,
+            )
             if launched is not None:
                 running.append(launched)
-                if len(running) < args.max_parallel and next_index < len(experiments):
+                if len(running) < args.max_parallel and pending:
                     time.sleep(2)
 
         if not running:
@@ -930,8 +1198,21 @@ def main() -> int:
             f"Effective CPU/OpenMP threads per job: {args.effective_cpu_threads_per_job}"
         ),
     )
+    prep_failures = prepare_artifacts(root, experiments, args, csv_path, log_path)
+    if prep_failures:
+        log_line(
+            log_path,
+            f"Artifact preparation failed with {prep_failures} failure(s). Aborting stage 3.",
+        )
+        return 1
+
     for exp in experiments:
-        _, supernet_path, library_path, save_path, stage_plan = build_command(root, exp, args)
+        _, supernet_path, library_path, save_path, stage_plan = build_command(
+            root,
+            exp,
+            args,
+            force_stage3=True,
+        )
         log_line(
             log_path,
             f"PLAN {exp.arch} {exp.dataset} alpha={exp.alpha} "
@@ -947,14 +1228,28 @@ def main() -> int:
         failures = 0
         for index, exp in enumerate(experiments, start=1):
             log_line(log_path, f"QUEUE [{index}/{len(experiments)}] {exp}")
-            ok = run_experiment(root, exp, args, csv_path, log_path)
+            ok = run_experiment(
+                root,
+                exp,
+                args,
+                csv_path,
+                log_path,
+                force_stage3=True,
+            )
             if not ok:
                 failures += 1
             if not args.dry_run and index < len(experiments):
                 time.sleep(2)
     else:
         log_line(log_path, f"Parallel mode enabled: max_parallel={args.max_parallel}")
-        failures = run_experiments_parallel(root, experiments, args, csv_path, log_path)
+        failures = run_experiments_parallel(
+            root,
+            experiments,
+            args,
+            csv_path,
+            log_path,
+            force_stage3=True,
+        )
 
     log_line(log_path, f"Finished with {failures} failure(s). CSV: {csv_path}")
     return 1 if failures else 0

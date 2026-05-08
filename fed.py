@@ -58,6 +58,7 @@ class Federator:
         self.tdd_normal_configs = None  # Normal configs for each level
         self.tdd_growth_configs = None  # Growth configs for each level
         self.tdd_growth_ratio = getattr(args, 'tdd_growth_ratio', 0.5)  # 50% devices use Growth
+        self.tdd_growth_budget_scale = getattr(args, 'tdd_growth_budget_scale', 1.0)
         self.tdd_all_model_configs = None  # Cache the full model library
 
         if self.tdd_enabled:
@@ -65,6 +66,7 @@ class Federator:
             self.tdd_scheduler = DynamicScheduler(rotation_period=rotation_period, enable_tdd=True)
             print(f"[TDD] Time-Domain Decomposition ENABLED")
             print(f"[TDD] Device-level mixing: {self.tdd_growth_ratio*100:.0f}% Growth, {(1-self.tdd_growth_ratio)*100:.0f}% Normal")
+            print(f"[TDD] Growth budget scale: {self.tdd_growth_budget_scale:.2f}x")
 
     def _empty_val_results(self):
         nan = float('nan')
@@ -239,16 +241,27 @@ class Federator:
                 for param in model.pre.parameters():
                     param.requires_grad = False
                     frozen_count += param.numel()
+            if start_block == 0 and hasattr(model, 'patch_embed'):
+                for param in model.patch_embed.parameters():
+                    param.requires_grad = False
+                    frozen_count += param.numel()
+                if hasattr(model, 'cls_token'):
+                    model.cls_token.requires_grad = False
+                    frozen_count += model.cls_token.numel()
+                if hasattr(model, 'pos_embed'):
+                    model.pos_embed.requires_grad = False
+                    frozen_count += model.pos_embed.numel()
 
             total_blocks = len(model.block)
-            print(f"    [DEBUG] MobileNet has {total_blocks} blocks")
+            block_family = "ViT" if hasattr(model, 'patch_embed') else "MobileNet"
+            print(f"    [DEBUG] {block_family} has {total_blocks} blocks")
             for block_idx, block in enumerate(model.block):
                 if start_block <= block_idx < end_block:
                     for param in block.parameters():
                         param.requires_grad = False
                         frozen_count += param.numel()
                 print(
-                    f"    [DEBUG] MobileNet block {block_idx}: "
+                    f"    [DEBUG] {block_family} block {block_idx}: "
                     f"{'frozen' if start_block <= block_idx < end_block else 'active'}"
                 )
 
@@ -309,6 +322,41 @@ class Federator:
         """
         return _infer_num_exits(model, self.args)
 
+    def _get_tdd_normal_early_exit_locations(self):
+        if not self.tdd_normal_configs:
+            return []
+
+        normal_early_exit_locations = []
+        for level in sorted(self.tdd_normal_configs.keys()):
+            if level == self.num_levels - 1:
+                continue
+            normal_early_exit_locations.append(self.tdd_normal_configs[level]['early_exit_location'])
+
+        return normal_early_exit_locations
+
+    def _get_tdd_output_selection(self, level, is_growth_mode):
+        if not self.tdd_enabled or self.tdd_normal_configs is None:
+            return None, False
+
+        normal_early_exit_locations = self._get_tdd_normal_early_exit_locations()
+
+        if level == self.num_levels - 1:
+            return normal_early_exit_locations, True
+
+        if is_growth_mode and self.tdd_growth_configs and self.tdd_growth_configs.get(level) is not None:
+            return [self.tdd_growth_configs[level]['early_exit_location']], False
+
+        normal_config = self.tdd_normal_configs.get(level)
+        if normal_config is None:
+            return None, False
+
+        normal_exit = normal_config['early_exit_location']
+        selected_exit_locations = [
+            exit_loc for exit_loc in normal_early_exit_locations
+            if exit_loc <= normal_exit
+        ]
+        return selected_exit_locations, False
+
     def _get_model_for_exit(self, exit_idx, scale):
         """
         获取指定 exit index 的模型副本。
@@ -364,6 +412,10 @@ class Federator:
             if hasattr(args, 'arch') and args.arch:
                 if 'mobilenet' in args.arch:
                     model_name = 'mobilenet'
+                elif 'convnext' in args.arch:
+                    model_name = 'convnext'
+                elif 'vit' in args.arch:
+                    model_name = 'vit_small'
                 elif 'resnet' in args.arch:
                     model_name = 'resnet'
                 elif 'vgg' in args.arch:
@@ -452,7 +504,16 @@ class Federator:
                           f"width={config['width_multipliers']}, params={config['num_params']:.0f}")
 
                 # Load full model library and find growth configs
-                model_name = 'resnet' if 'resnet' in args.arch else ('vgg' if 'vgg' in args.arch else 'mobilenet')
+                if 'resnet' in args.arch:
+                    model_name = 'resnet'
+                elif 'vgg' in args.arch:
+                    model_name = 'vgg'
+                elif 'convnext' in args.arch:
+                    model_name = 'convnext'
+                elif 'vit' in args.arch:
+                    model_name = 'vit_small'
+                else:
+                    model_name = 'mobilenet'
                 dataset_name = getattr(args, 'data', 'cifar100')
                 config_path = args.config_library_path or f"{model_name}_{dataset_name}_architecture_library.json"
                 self.tdd_all_model_configs = load_configs_from_json(config_path, model_type=model_name)
@@ -461,7 +522,8 @@ class Federator:
                 self.tdd_growth_configs = find_all_growth_configs(
                     self.tdd_normal_configs,
                     self.tdd_all_model_configs,
-                    model_type=model_name
+                    model_type=model_name,
+                    growth_budget_scale=self.tdd_growth_budget_scale
                 )
 
                 # === TDD: Update horizontal_scale_ratios based on actual exit structure ===
@@ -617,7 +679,22 @@ class Federator:
             else:
                 h_scale_ratio_for_client = h_scale_ratios[i]
 
-            client_args = pool_args + [local_models[i], client_train_loaders[i], exit_idx_for_training, scales[i], h_scale_ratio_for_client, client_idx, is_growth_mode]
+            selected_exit_locations, include_final_output = self._get_tdd_output_selection(
+                levels[i],
+                is_growth_mode,
+            )
+
+            client_args = pool_args + [
+                local_models[i],
+                client_train_loaders[i],
+                exit_idx_for_training,
+                scales[i],
+                h_scale_ratio_for_client,
+                client_idx,
+                is_growth_mode,
+                selected_exit_locations,
+                include_final_output,
+            ]
             client_train_start = time.perf_counter()
             result = execute_client_round(client_args)
             client_train_duration = time.perf_counter() - client_train_start
@@ -792,6 +869,10 @@ class Federator:
                 if key not in grad_flags[i]:
                     continue
                 if grad_flags[i][key]:
+                    if tuple(w[i][key].shape) == tuple(w_avg[key].shape):
+                        tmp += w[i][key]
+                        count += 1
+                        continue
                     idx = self.idx_dicts[levels[i]][key]
                     idx = self.fix_idx_array(idx, w[i][key].shape)
                     tmp[idx] += w[i][key].flatten()
@@ -886,6 +967,10 @@ class Federator:
                 print('Models are not alignable!')
                 raise RuntimeError
 
+            if tuple(global_shape) == tuple(local_shape):
+                local_state_dict[n] = p.clone()
+                continue
+
             idx_array = self.fix_idx_array(level_idx_dict[n], local_shape)
             local_state_dict[n] = p[idx_array].reshape(local_shape)
 
@@ -896,7 +981,8 @@ class Federator:
 
 def execute_client_round(args):
     train_set, user_groups, criterion, args, batch_size, train_params, round_idx, global_model, \
-    local_model, client_train_loader, level, scale, h_scale_ratio, client_idx, is_growth_mode = args
+    local_model, client_train_loader, level, scale, h_scale_ratio, client_idx, is_growth_mode, \
+    selected_exit_locations, include_final_output = args
 
     if args.use_gpu:
         local_model = local_model.cuda()
@@ -905,18 +991,31 @@ def execute_client_round(args):
     base_params = [v for k, v in local_model.named_parameters() if 'ee_' not in k and v.requires_grad]
     exit_params = [v for k, v in local_model.named_parameters() if 'ee_' in k and v.requires_grad]
 
-    optimizer = torch.optim.SGD([{'params': base_params},
-                                 {'params': exit_params}],
-                                lr=train_params['lr'],
-                                momentum=train_params['momentum'],
-                                weight_decay=train_params['weight_decay'])
+    optimizer_name = train_params.get('optimizer', 'sgd').lower()
+    param_groups = [{'params': base_params}, {'params': exit_params}]
+    if optimizer_name == 'adamw':
+        optimizer = torch.optim.AdamW(
+            param_groups,
+            lr=train_params['lr'],
+            weight_decay=train_params['weight_decay'],
+        )
+    else:
+        optimizer = torch.optim.SGD(
+            param_groups,
+            lr=train_params['lr'],
+            momentum=train_params['momentum'],
+            weight_decay=train_params['weight_decay'],
+        )
 
     loss = 0.0
     for epoch in range(train_params['num_epoch']):
         print(f'{client_idx}-{epoch}-{dt.datetime.now()}')
         iter_idx = round_idx
         loss = execute_epoch(local_model, client_train_loader, criterion, optimizer, iter_idx, epoch,
-                             args, train_params, h_scale_ratio, level, global_model, is_growth_mode=is_growth_mode)
+                             args, train_params, h_scale_ratio, level, global_model,
+                             is_growth_mode=is_growth_mode,
+                             selected_exit_locations=selected_exit_locations,
+                             include_final_output=include_final_output)
 
     print(f'Finished epochs for {client_idx}')
     state_dict = local_model.state_dict(keep_vars=True)

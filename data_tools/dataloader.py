@@ -179,36 +179,70 @@ class DatasetSplit(Dataset):
 
 def get_datasets(args):
     val_set = None
+    is_vit = (
+        (hasattr(args, 'arch') and args.arch and 'vit' in args.arch.lower())
+        or (hasattr(args, 'model') and args.model and args.model.lower() == 'vit')
+    )
+    if is_vit:
+        def make_vit_transforms(mean, std):
+            train_transform = transforms.Compose([
+                transforms.RandomResizedCrop(224),
+                transforms.RandomHorizontalFlip(),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+            ])
+            eval_transform = transforms.Compose([
+                transforms.Resize(224),
+                transforms.CenterCrop(224),
+                transforms.ToTensor(),
+                transforms.Normalize(mean=mean, std=std),
+            ])
+            return train_transform, eval_transform
+
     if args.data == 'cifar10':
         normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
                                          std=[0.25, 0.25, 0.25])
+        if is_vit:
+            vit_train_transform, vit_eval_transform = make_vit_transforms(
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5],
+            )
+        train_transform = vit_train_transform if is_vit else transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ])
+        test_transform = vit_eval_transform if is_vit else transforms.Compose([
+            transforms.ToTensor(),
+            normalize
+        ])
         train_set = tvdatasets.CIFAR10(args.data_root, train=True, download=True,
-                                       transform=transforms.Compose([
-                                           transforms.RandomCrop(32, padding=4),
-                                           transforms.RandomHorizontalFlip(),
-                                           transforms.ToTensor(),
-                                           normalize
-                                       ]))
+                                       transform=train_transform)
         test_set = tvdatasets.CIFAR10(args.data_root, train=False,
-                                      transform=transforms.Compose([
-                                          transforms.ToTensor(),
-                                          normalize
-                                      ]))
+                                      transform=test_transform)
     elif args.data == 'cifar100':
         normalize = transforms.Normalize(mean=[0.5, 0.5, 0.5],
                                          std=[0.25, 0.25, 0.25])
+        if is_vit:
+            vit_train_transform, vit_eval_transform = make_vit_transforms(
+                mean=[0.5, 0.5, 0.5],
+                std=[0.5, 0.5, 0.5],
+            )
+        train_transform = vit_train_transform if is_vit else transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            normalize
+        ])
+        test_transform = vit_eval_transform if is_vit else transforms.Compose([
+            transforms.ToTensor(),
+            normalize
+        ])
         train_set = tvdatasets.CIFAR100(args.data_root, train=True, download=True,
-                                        transform=transforms.Compose([
-                                            transforms.RandomCrop(32, padding=4),
-                                            transforms.RandomHorizontalFlip(),
-                                            transforms.ToTensor(),
-                                            normalize
-                                        ]))
+                                        transform=train_transform)
         test_set = tvdatasets.CIFAR100(args.data_root, train=False,
-                                       transform=transforms.Compose([
-                                           transforms.ToTensor(),
-                                           normalize
-                                       ]))
+                                       transform=test_transform)
     elif args.data == 'tiny_imagenet':
         # Tiny ImageNet (200 classes, 64x64 images)
         # Auto-download if not exists
@@ -227,8 +261,22 @@ def get_datasets(args):
                                                                       std=[0.2770, 0.2691, 0.2821])])
 
         # 使用自定义数据集类正确处理 TinyImageNet
-        train_set = TinyImageNetDataset(tiny_imagenet_dir, train=True, transform=trans_imagenet_train)
-        test_set = TinyImageNetDataset(tiny_imagenet_dir, train=False, transform=trans_imagenet_val)
+        if is_vit:
+            vit_train_transform, vit_eval_transform = make_vit_transforms(
+                mean=[0.4802, 0.4481, 0.3975],
+                std=[0.2770, 0.2691, 0.2821],
+            )
+
+        train_set = TinyImageNetDataset(
+            tiny_imagenet_dir,
+            train=True,
+            transform=vit_train_transform if is_vit else trans_imagenet_train,
+        )
+        test_set = TinyImageNetDataset(
+            tiny_imagenet_dir,
+            train=False,
+            transform=vit_eval_transform if is_vit else trans_imagenet_val,
+        )
     else:
         raise NotImplementedError
 
@@ -295,7 +343,7 @@ def get_dataloaders(args, batch_size, dataset):
                 **_loader_kwargs(args, 'eval'))
             test_loader = val_loader
 
-    if 'train' not in args.splits:
+    if 'train' not in args.splits and 'vit' not in args.arch.lower():
         if len(val_loader.dataset.transform.transforms) > 2:
             val_loader.dataset.transform.transforms = val_loader.dataset.transform.transforms[-2:]
 

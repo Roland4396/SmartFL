@@ -6,6 +6,8 @@ import numpy as np
 import hashlib
 import pickle
 
+CACHE_VERSION = "hierarchy_v2"
+
 def load_configs_from_json(filepath, model_type=None, dataset=None):
     """
     Loads model configurations from the specified JSON file with validation.
@@ -19,6 +21,7 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
     try:
         with open(filepath, 'r') as f:
             data = json.load(f)
+        metadata = {}
 
         # Handle both old format (direct list) and new format (with metadata)
         if isinstance(data, list):
@@ -48,6 +51,13 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
         else:
             print(f"Error: Invalid configuration file format")
             return []
+
+        config_model_type = metadata.get("model_type") or model_type
+        if config_model_type:
+            configs = [
+                {**config, "_model_type": config_model_type}
+                for config in configs
+            ]
 
         print(f"Loaded {len(configs)} configurations.")
         return configs
@@ -91,6 +101,42 @@ def get_vgg_stage_from_exit_location(exit_loc):
     else:                # Stage 4: layers 10-12 (512,512,512)
         return 4
 
+def get_mobilenet_prefix_len_from_exit_location(exit_loc):
+    """
+    Return how many MobileNetV2 width-multiplier entries belong to the executed
+    prefix up to a given bottleneck-level exit.
+    """
+    prefix_map = {
+        0: 2,
+        1: 3,
+        2: 3,
+        3: 4,
+        4: 4,
+        5: 4,
+        6: 5,
+        7: 5,
+        8: 5,
+        9: 5,
+        10: 6,
+        11: 6,
+        12: 6,
+        13: 7,
+        14: 7,
+        15: 7,
+        16: 8,
+    }
+    if exit_loc not in prefix_map:
+        raise ValueError(f"Unsupported MobileNet early-exit location: {exit_loc}")
+    return prefix_map[exit_loc]
+
+def get_vit_prefix_len_from_exit_location(exit_loc):
+    """
+    ViT width multipliers control four MLP stages, each covering three blocks.
+    """
+    if exit_loc < 1 or exit_loc > 12:
+        raise ValueError(f"Unsupported ViT early-exit location: {exit_loc}")
+    return min(4, (exit_loc + 2) // 3)
+
 def vgg_layers_to_stages(layer_multipliers):
     """
     Convert 15 layer multipliers to 6 stage multipliers for VGG comparison
@@ -130,6 +176,12 @@ def get_actual_channels(width_multipliers, model_type="resnet"):
         # MobileNetV2 8 stages base channels: [32, 16, 24, 32, 64, 96, 160, 320]
         base_channels = [32, 16, 24, 32, 64, 96, 160, 320]
         return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
+    elif model_type == "convnext":
+        base_channels = [32, 64, 128, 256]
+        return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
+    elif model_type == "vit":
+        base_channels = [1536] * len(width_multipliers)
+        return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
     else:
         # Fallback to resnet for unknown model types
         base_channels = [16, 32, 64]
@@ -146,10 +198,17 @@ def is_sub_model(config_sub, config_super):
 
     # 获取实际的channel数量 - 从配置中推断模型类型
     # 检查是否包含VGG特有的字段
-    if 'exit_stage' in config_sub or len(config_sub['width_multipliers']) == 15:
+    explicit_model_type = config_sub.get("_model_type") or config_super.get("_model_type")
+    if explicit_model_type:
+        model_type = explicit_model_type
+    elif 'exit_stage' in config_sub or len(config_sub['width_multipliers']) == 15:
         model_type = "vgg"
     elif len(config_sub['width_multipliers']) == 8:
         model_type = "mobilenet"
+    elif len(config_sub['width_multipliers']) == 4:
+        model_type = "convnext"
+    elif len(config_sub['width_multipliers']) in (1, 12):
+        model_type = "vit"
     elif len(config_sub['width_multipliers']) == 3:
         model_type = "resnet"
     else:
@@ -158,6 +217,11 @@ def is_sub_model(config_sub, config_super):
 
     sub_channels = get_actual_channels(config_sub['width_multipliers'], model_type)
     super_channels = get_actual_channels(config_super['width_multipliers'], model_type)
+
+    if model_type == "convnext" and config_sub['early_exit_location'] >= config_super['early_exit_location']:
+        return False
+    if model_type == "vit" and config_sub['early_exit_location'] >= config_super['early_exit_location']:
+        return False
 
     if model_type == "vgg":
         # 对于VGG: 使用early_exit_location直接比较，不需要stage概念
@@ -187,8 +251,19 @@ def is_sub_model(config_sub, config_super):
         # 对于MobileNet: 直接比较所有 stages 的 channels
         # MobileNet 的 early_exit_location 对应到具体的 block
         # 所有 8 个 stages 的 channels 都要匹配
-        for i in range(len(sub_channels)):
+        prefix_len = get_mobilenet_prefix_len_from_exit_location(config_sub['early_exit_location'])
+        for i in range(prefix_len):
             if sub_channels[i] != super_channels[i]:
+                return False
+    elif model_type == "convnext":
+        sub_exit_stage = config_sub['early_exit_location']
+        for i in range(sub_exit_stage + 1):
+            if sub_channels[i] != super_channels[i]:
+                return False
+    elif model_type == "vit":
+        prefix_len = get_vit_prefix_len_from_exit_location(config_sub['early_exit_location'])
+        for i in range(min(prefix_len, len(sub_channels), len(super_channels))):
+            if sub_channels[i] > super_channels[i]:
                 return False
     else:
         # 对于ResNet: 按stage比较
@@ -214,7 +289,7 @@ def generate_cache_key(participating_levels, beam_width, config_hash, flops_cons
         params_str = "_".join([f"{k}:{v}p" for k, v in sorted(params_constraints.items())])
         constraint_parts.append(params_str)
     
-    cache_str = f"{levels_str}_{'_'.join(constraint_parts)}_{beam_width}_{config_hash}"
+    cache_str = f"{CACHE_VERSION}_{levels_str}_{'_'.join(constraint_parts)}_{beam_width}_{config_hash}"
     
     # Create hash for filename
     return hashlib.md5(cache_str.encode()).hexdigest()
@@ -232,6 +307,11 @@ def load_cached_result(cache_file):
         if os.path.exists(cache_file):
             with open(cache_file, 'rb') as f:
                 cached_data = pickle.load(f)
+            current_timestamp = os.path.getmtime(__file__)
+            cached_timestamp = cached_data.get('timestamp')
+            if cached_timestamp is not None and cached_timestamp != current_timestamp:
+                print(f"[CACHE] Ignoring stale hierarchical cache: {cache_file}")
+                return None
             print(f"[CACHE] Loaded cached hierarchical result from: {cache_file}")
             return cached_data['result']
         return None
@@ -307,62 +387,56 @@ def postprocess_vgg_results(result):
 
 def ensure_distinct_early_exits(hierarchy_dict, all_configs):
     """
-    确保不同等级的early exit位置互不相同。
-    从低等级开始，如果发现重复的eeloc，就将高等级的eeloc+1。
-    注意：最后一个等级的eeloc不参与检查（因为模型生成时会去除）。
-    重要：调整eeloc时，保持width_multipliers与前一等级一致。
-
-    Args:
-        hierarchy_dict: 层次化配置字典 {level: config}
-        all_configs: 原始配置库，用于重新计算FLOPS和params
-
-    Returns:
-        调整后的层次化配置字典
+    Ensure non-final participating levels use strictly increasing early-exit locations
+    when the architecture library provides such exits.
     """
     if len(hierarchy_dict) <= 1:
         return hierarchy_dict
 
-    # 获取排序后的等级列表，排除最后一个等级
     sorted_levels = sorted(hierarchy_dict.keys())
-    levels_to_check = sorted_levels[:-1]  # 排除最后一个等级
-
+    levels_to_check = sorted_levels[:-1]
     print(f"Checking early exit distinctness for levels: {levels_to_check}")
 
-    # 从第二个等级开始检查
+    available_exits = sorted({config['early_exit_location'] for config in all_configs})
+
     for i in range(1, len(levels_to_check)):
         current_level = levels_to_check[i]
-        prev_level = levels_to_check[i-1]
+        prev_level = levels_to_check[i - 1]
 
         current_eeloc = hierarchy_dict[current_level]['early_exit_location']
         prev_eeloc = hierarchy_dict[prev_level]['early_exit_location']
 
-        # 如果当前等级的eeloc <= 前一个等级的eeloc，需要调整
-        if current_eeloc <= prev_eeloc:
-            new_eeloc = prev_eeloc + 1
-            print(f"Level {current_level} early exit conflict: {current_eeloc} -> {new_eeloc}")
+        if current_eeloc > prev_eeloc:
+            continue
 
-            # 创建新配置：使用前一等级的width_multipliers，但更新eeloc
-            prev_config = hierarchy_dict[prev_level]
-            current_config = hierarchy_dict[current_level].copy()
+        next_valid_exit = next((exit_loc for exit_loc in available_exits if exit_loc > prev_eeloc), None)
+        if next_valid_exit is None:
+            print(f"Level {current_level} early exit conflict unresolved: no exit deeper than {prev_eeloc}")
+            continue
 
-            # 关键：保持width_multipliers与前一等级一致
-            current_config['early_exit_location'] = new_eeloc
-            current_config['width_multipliers'] = prev_config['width_multipliers'].copy()
+        prev_config = hierarchy_dict[prev_level]
+        replacement_config = None
+        for config in all_configs:
+            if config['early_exit_location'] != next_valid_exit:
+                continue
+            if config['width_multipliers'] == prev_config['width_multipliers']:
+                replacement_config = config.copy()
+                break
 
-            print(f"  Using width_multipliers from Level {prev_level}: {prev_config['width_multipliers'][:5]}...")
+        if replacement_config is None:
+            replacement_config = hierarchy_dict[current_level].copy()
+            replacement_config['width_multipliers'] = prev_config['width_multipliers'].copy()
+            replacement_config['early_exit_location'] = next_valid_exit
+        else:
+            replacement_config['width_multipliers'] = prev_config['width_multipliers'].copy()
 
-            # 重新计算FLOPS和params
-            updated_config = recalculate_config_metrics(current_config)
-            hierarchy_dict[current_level] = updated_config
+        hierarchy_dict[current_level] = replacement_config
+        print(f"Level {current_level} early exit conflict: {current_eeloc} -> {next_valid_exit}")
 
-            print(f"  Updated config: eeloc={new_eeloc}, flops={updated_config['flops_m']:.2f}M, params={updated_config['num_params']:.0f}")
-
-    # 验证最终结果
     final_eelocs = [hierarchy_dict[level]['early_exit_location'] for level in levels_to_check]
     print(f"Final early exit positions: {dict(zip(levels_to_check, final_eelocs))}")
 
     return hierarchy_dict
-
 
 def recalculate_config_metrics(config):
     """
@@ -423,7 +497,12 @@ def recalculate_config_metrics(config):
         return config
 
 
-def find_growth_config_for_level(normal_config, all_configs, model_type="resnet", available_exits=None):
+def find_growth_config_for_level(
+        normal_config,
+        all_configs,
+        model_type="resnet",
+        available_exits=None,
+        growth_budget_scale=1.0):
     """
     为给定的 normal 配置找到最优的生长配置。
 
@@ -464,6 +543,12 @@ def find_growth_config_for_level(normal_config, all_configs, model_type="resnet"
         locked_stages = get_stage_from_exit_location(normal_exit) + 1
     elif model_type == "vgg":
         locked_stages = get_vgg_stage_from_exit_location(normal_exit) + 1
+    elif model_type == "mobilenet":
+        locked_stages = get_mobilenet_prefix_len_from_exit_location(normal_exit)
+    elif model_type == "convnext":
+        locked_stages = normal_exit + 1
+    elif model_type == "vit":
+        locked_stages = get_vit_prefix_len_from_exit_location(normal_exit)
     else:
         locked_stages = len(normal_width)  # 锁定全部
 
@@ -482,9 +567,11 @@ def find_growth_config_for_level(normal_config, all_configs, model_type="resnet"
 
         # 3. 前缀 width 必须匹配
         config_width = config['width_multipliers']
+        normal_channels = get_actual_channels(normal_width, model_type)
+        config_channels = get_actual_channels(config_width, model_type)
         prefix_match = True
-        for i in range(min(locked_stages, len(normal_width), len(config_width))):
-            if normal_width[i] != config_width[i]:
+        for i in range(min(locked_stages, len(normal_channels), len(config_channels))):
+            if normal_channels[i] != config_channels[i]:
                 prefix_match = False
                 break
         if not prefix_match:
@@ -498,16 +585,28 @@ def find_growth_config_for_level(normal_config, all_configs, model_type="resnet"
         config_params = config['num_params']
         growth_cost = 3 * config_params - 2 * normal_params
 
-        if growth_cost > memory_budget:
+        if growth_cost > memory_budget * growth_budget_scale:
             continue
 
         # 计算生长部分的参数量
         growth_params = config_params - normal_params
 
+        # 计算生长部分的参数量
+
+        if model_type == "mobilenet":
+            frozen_range = (0, normal_exit + 1)
+            active_range = (normal_exit + 1, config_exit + 1)
+        elif model_type == "vit":
+            frozen_range = (0, normal_exit)
+            active_range = (normal_exit, config_exit)
+        else:
+            frozen_range = (0, normal_exit)
+            active_range = (normal_exit, config_exit)
+
         candidates.append({
             **config,
-            'frozen_range': (0, normal_exit),
-            'active_range': (normal_exit, config_exit),
+            'frozen_range': frozen_range,
+            'active_range': active_range,
             'growth_params': growth_params,
             'growth_cost': growth_cost
         })
@@ -520,7 +619,7 @@ def find_growth_config_for_level(normal_config, all_configs, model_type="resnet"
     return best
 
 
-def find_all_growth_configs(normal_configs, all_configs, model_type="resnet"):
+def find_all_growth_configs(normal_configs, all_configs, model_type="resnet", growth_budget_scale=1.0):
     """
     为所有 level 的 normal 配置找到对应的生长配置。
 
@@ -545,7 +644,11 @@ def find_all_growth_configs(normal_configs, all_configs, model_type="resnet"):
         normal_config = normal_configs[level]
         # 不限制 available_exits，让算法自由选择最优的 exit 位置
         growth_config = find_growth_config_for_level(
-            normal_config, all_configs, model_type, available_exits=None
+            normal_config,
+            all_configs,
+            model_type,
+            available_exits=None,
+            growth_budget_scale=growth_budget_scale
         )
         growth_configs[level] = growth_config
 
@@ -691,11 +794,18 @@ def find_best_config_for_distribution(all_configs, participating_levels, beam_wi
         return None
 
     # 检测模型类型并预处理VGG配置
+    explicit_model_type = all_configs[0].get("_model_type")
     width_len = len(all_configs[0]['width_multipliers'])
-    if width_len == 15:
+    if explicit_model_type:
+        model_type = explicit_model_type
+    elif width_len == 15:
         model_type = "vgg"
     elif width_len == 8:
         model_type = "mobilenet"
+    elif width_len == 4:
+        model_type = "convnext"
+    elif width_len in (1, 12):
+        model_type = "vit"
     elif width_len == 3:
         model_type = "resnet"
     else:

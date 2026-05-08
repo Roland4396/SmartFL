@@ -186,7 +186,10 @@ class ResNet(nn.Module):
             # TDD: 如果启用了 TDD，计算 Growth configs 并把它们的 exit 位置也加入
             if getattr(args, 'enable_tdd', 0) == 1:
                 growth_configs = find_all_growth_configs(
-                    best_configs_for_round, all_model_configs, model_type="resnet"
+                    best_configs_for_round,
+                    all_model_configs,
+                    model_type="resnet",
+                    growth_budget_scale=getattr(args, 'tdd_growth_budget_scale', 1.0)
                 )
                 growth_exit_locations = []
                 # 把 growth exit 位置加入 ee_loc_list

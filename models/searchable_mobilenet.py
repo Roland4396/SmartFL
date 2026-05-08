@@ -1,10 +1,12 @@
+import math
+
 import torch
 import torch.nn as nn
-import math
 
 
 class LinearBottleNeck(nn.Module):
-    """Inverted Residual Block for MobileNetV2"""
+    """Inverted residual block for MobileNetV2."""
+
     def __init__(self, in_channels, out_channels, stride, t):
         super(LinearBottleNeck, self).__init__()
 
@@ -12,13 +14,11 @@ class LinearBottleNeck(nn.Module):
             nn.Conv2d(in_channels, in_channels * t, 1),
             nn.BatchNorm2d(in_channels * t),
             nn.ReLU6(inplace=True),
-
             nn.Conv2d(in_channels * t, in_channels * t, 3, stride=stride, padding=1, groups=in_channels * t),
             nn.BatchNorm2d(in_channels * t),
             nn.ReLU6(inplace=True),
-
             nn.Conv2d(in_channels * t, out_channels, 1),
-            nn.BatchNorm2d(out_channels)
+            nn.BatchNorm2d(out_channels),
         )
 
         self.stride = stride
@@ -27,29 +27,39 @@ class LinearBottleNeck(nn.Module):
 
     def forward(self, x):
         residual = self.residual(x)
-
         if self.stride == 1 and self.in_channels == self.out_channels:
             residual += x
-
         return residual
+
+
+MOBILENET_BOTTLENECK_SPECS = [
+    (0, 1, 1, 1),
+    (1, 2, 2, 6),
+    (2, 2, 1, 6),
+    (2, 3, 2, 6),
+    (3, 3, 1, 6),
+    (3, 3, 1, 6),
+    (3, 4, 2, 6),
+    (4, 4, 1, 6),
+    (4, 4, 1, 6),
+    (4, 4, 1, 6),
+    (4, 5, 1, 6),
+    (5, 5, 1, 6),
+    (5, 5, 1, 6),
+    (5, 6, 2, 6),
+    (6, 6, 1, 6),
+    (6, 6, 1, 6),
+    (6, 7, 1, 6),
+]
+MOBILENET_EXIT_STAGE_IDS = [spec[1] for spec in MOBILENET_BOTTLENECK_SPECS]
 
 
 class SearchableMobileNetV2(nn.Module):
     """
-    Searchable MobileNetV2 for supernet training (Phase 1)
+    Searchable MobileNetV2 for supernet training and architecture evaluation.
 
-    Architecture:
-    - Stage 0: Initial conv (3 -> 32)
-    - Stage 1: Inverted residual blocks (32 -> 16 -> 24 -> 32 -> 64 -> 96 -> 160 -> 320)
-    - Each stage can be scaled by width_multipliers
-
-    Args:
-        num_classes: Number of output classes
-        width_multipliers: List of width multipliers for each stage [stage0, ..., stage7]
-                          8 multipliers for MobileNetV2 stages (based on output channels)
-                          [32, 16, 24, 32, 64, 96, 160, 320]
-        early_exit_location: Block index for early exit (0-8 for 9 blocks)
-        num_channels: Input channels (default: 3 for RGB)
+    Exits are indexed on the 17 MobileNetV2 bottleneck units.
+    Width multipliers control the 8 channel stages: [32, 16, 24, 32, 64, 96, 160, 320].
     """
 
     def __init__(self, num_classes, width_multipliers, early_exit_location=None, num_channels=3):
@@ -63,71 +73,37 @@ class SearchableMobileNetV2(nn.Module):
         self.early_exit_location = early_exit_location
         self.num_channels = num_channels
 
-        # Stage channel definitions with width_multipliers (8 stages total)
-        # Matching mobilenet.py magic_list: [0, 16, 24, 32, 64, 96, 160, 160, 160, 320]
-        # Stage 6 controls all three 160-channel blocks (blocks 5,6,7) with the same multiplier
         self.stage_channels = [
-            int(32 * width_multipliers[0]),   # Stage 0: pre layer (initial conv)
-            int(16 * width_multipliers[1]),   # Stage 1: block[0] output
-            int(24 * width_multipliers[2]),   # Stage 2: block[1] output
-            int(32 * width_multipliers[3]),   # Stage 3: block[2] output
-            int(64 * width_multipliers[4]),   # Stage 4: block[3] output
-            int(96 * width_multipliers[5]),   # Stage 5: block[4] output
-            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (all three 160s share same multiplier)
-            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (second 160)
-            int(160 * width_multipliers[6]),  # Stage 6: blocks[5,6,7] output (third 160)
-            int(320 * width_multipliers[7])   # Stage 7: block[8] output (final)
+            int(32 * width_multipliers[0]),
+            int(16 * width_multipliers[1]),
+            int(24 * width_multipliers[2]),
+            int(32 * width_multipliers[3]),
+            int(64 * width_multipliers[4]),
+            int(96 * width_multipliers[5]),
+            int(160 * width_multipliers[6]),
+            int(320 * width_multipliers[7]),
         ]
+        self.block_output_stage_ids = MOBILENET_EXIT_STAGE_IDS
 
-        # Initial convolution
         self.pre = nn.Sequential(
             nn.Conv2d(num_channels, self.stage_channels[0], 3, padding=1),
             nn.BatchNorm2d(self.stage_channels[0]),
-            nn.ReLU6(inplace=True)
+            nn.ReLU6(inplace=True),
         )
 
-        # Build inverted residual blocks (9 blocks total, matching mobilenet.py structure)
-        # Output channels: [16, 24, 32, 64, 96, 160, 160, 160, 320]
-        # Each block has independent parameters (even if channel dimensions repeat)
+        self.blocks = nn.ModuleList(self._make_bottleneck_blocks())
 
-        self.blocks = nn.ModuleList([
-            # Block 0: 32->16 (t=1, no expansion)
-            LinearBottleNeck(self.stage_channels[0], self.stage_channels[1], 1, 1),
-
-            # Block 1: 16->24 (Sequential包含2个bottleneck, 整体作为一个block)
-            self._make_stage(2, self.stage_channels[1], self.stage_channels[2], 2, 6),
-
-            # Block 2: 24->32 (Sequential包含3个bottleneck, 整体作为一个block)
-            self._make_stage(3, self.stage_channels[2], self.stage_channels[3], 2, 6),
-
-            # Block 3: 32->64 (Sequential包含4个bottleneck, 整体作为一个block)
-            self._make_stage(4, self.stage_channels[3], self.stage_channels[4], 2, 6),
-
-            # Block 4: 64->96 (Sequential包含3个bottleneck, 整体作为一个block)
-            self._make_stage(3, self.stage_channels[4], self.stage_channels[5], 1, 6),
-
-            # Blocks 5-7: Each with INDEPENDENT parameters (matching mobilenet.py's 3 separate calls)
-            LinearBottleNeck(self.stage_channels[5], self.stage_channels[6], 2, 6),  # Block 5: 96->160 (stride=2)
-            LinearBottleNeck(self.stage_channels[6], self.stage_channels[7], 1, 6),  # Block 6: 160->160 (stride=1)
-            LinearBottleNeck(self.stage_channels[7], self.stage_channels[8], 1, 6),  # Block 7: 160->160 (stride=1)
-
-            # Block 8: 160->320 (final)
-            LinearBottleNeck(self.stage_channels[8], self.stage_channels[9], 1, 6)
-        ])
-
-        # Global pooling and final classifier (matching ScaleFL structure)
+        final_channels = self.stage_channels[-1]
         self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
-        # Use Conv-based classifier like ScaleFL for consistency
         self.classifier = nn.Sequential(
-            nn.Conv2d(self.stage_channels[9], self.stage_channels[9] * 4, 1),
-            nn.BatchNorm2d(self.stage_channels[9] * 4),
+            nn.Conv2d(final_channels, final_channels * 4, 1),
+            nn.BatchNorm2d(final_channels * 4),
             nn.ReLU6(inplace=True),
             nn.AdaptiveAvgPool2d((1, 1)),
-            nn.Conv2d(self.stage_channels[9] * 4, num_classes, 1),
-            nn.Flatten()
+            nn.Conv2d(final_channels * 4, num_classes, 1),
+            nn.Flatten(),
         )
 
-        # Early exit classifier if needed (matching ScaleFL structure)
         self.early_exit_classifier = None
         if early_exit_location is not None:
             exit_channels = self._get_channels_at_location(early_exit_location)
@@ -137,64 +113,58 @@ class SearchableMobileNetV2(nn.Module):
                 nn.ReLU6(inplace=True),
                 nn.AdaptiveAvgPool2d((1, 1)),
                 nn.Conv2d(exit_channels * 4, num_classes, 1),
-                nn.Flatten()
+                nn.Flatten(),
             )
 
-        # Initialize weights
         self._initialize_weights()
 
-    def _make_stage(self, n, in_channels, out_channels, stride, t):
-        """Create a stage with n blocks"""
-        layers = [LinearBottleNeck(in_channels, out_channels, stride, t)]
-
-        for _ in range(1, n):
-            layers.append(LinearBottleNeck(out_channels, out_channels, 1, t))
-
-        return nn.Sequential(*layers)
-
-    def _get_channels_at_location(self, location):
-        """Get output channels at a specific block location"""
-        # Map block location to corresponding channel (matching mobilenet.py magic_list)
-        channel_map = [
-            self.stage_channels[1],  # Block 0 output: 16
-            self.stage_channels[2],  # Block 1 output: 24
-            self.stage_channels[3],  # Block 2 output: 32
-            self.stage_channels[4],  # Block 3 output: 64
-            self.stage_channels[5],  # Block 4 output: 96
-            self.stage_channels[6],  # Block 5 output: 160 (with multiplier[6])
-            self.stage_channels[6],  # Block 6 output: 160 (same as block 5, multiplier[6])
-            self.stage_channels[6],  # Block 7 output: 160 (same as block 5, multiplier[6])
-            self.stage_channels[9],  # Block 8 output: 320 (with multiplier[7])
+    def _make_bottleneck_blocks(self):
+        return [
+            LinearBottleNeck(
+                self.stage_channels[in_stage],
+                self.stage_channels[out_stage],
+                stride,
+                expansion,
+            )
+            for in_stage, out_stage, stride, expansion in MOBILENET_BOTTLENECK_SPECS
         ]
 
-        if location < len(channel_map):
-            return channel_map[location]
-        return self.stage_channels[9]  # Default to final channels (320)
+    def _get_channels_at_location(self, location):
+        if location < 0 or location >= len(self.block_output_stage_ids):
+            raise ValueError(f"Unsupported MobileNetV2 bottleneck exit: {location}")
+        return self.stage_channels[self.block_output_stage_ids[location]]
+
+    def get_conv_layer_cutoff(self, early_exit_location):
+        if early_exit_location < 0 or early_exit_location >= len(self.blocks):
+            raise ValueError(f"Unsupported MobileNetV2 bottleneck exit: {early_exit_location}")
+        return 1 + 3 * (early_exit_location + 1)
+
+    def count_params_to_exit(self, early_exit_location):
+        if early_exit_location < 0 or early_exit_location >= len(self.blocks):
+            raise ValueError(f"Unsupported MobileNetV2 bottleneck exit: {early_exit_location}")
+
+        total_params = sum(p.numel() for p in self.pre.parameters())
+        for block in self.blocks[:early_exit_location + 1]:
+            total_params += sum(p.numel() for p in block.parameters())
+        if self.early_exit_classifier is not None:
+            total_params += sum(p.numel() for p in self.early_exit_classifier.parameters())
+        return total_params
 
     def forward(self, x, manual_early_exit_index=None):
-        """Forward pass with optional early exit"""
         x = self.pre(x)
 
-        # Process through blocks
         for block_idx, block in enumerate(self.blocks):
             x = block(x)
+            if self.early_exit_location is not None and block_idx == self.early_exit_location:
+                return [self.early_exit_classifier(x)]
 
-            # Check for early exit
-            if (self.early_exit_location is not None and
-                block_idx == self.early_exit_location):
-                return [self.early_exit_classifier(x)]  # Return as list to match other models
-
-        # Final classification (classifier now handles pooling internally)
-        final_output = self.classifier(x)
-
-        return final_output
+        return self.classifier(x)
 
     def _initialize_weights(self):
-        """Initialize model weights"""
         for m in self.modules():
             if isinstance(m, nn.Conv2d):
                 n = m.kernel_size[0] * m.kernel_size[1] * m.out_channels
-                m.weight.data.normal_(0, math.sqrt(2. / n))
+                m.weight.data.normal_(0, math.sqrt(2.0 / n))
                 if m.bias is not None:
                     m.bias.data.zero_()
             elif isinstance(m, nn.BatchNorm2d):
@@ -206,31 +176,27 @@ class SearchableMobileNetV2(nn.Module):
 
 
 def searchable_mobilenet_v2(num_classes, width_multipliers, early_exit_location=None, num_channels=3):
-    """Create SearchableMobileNetV2 model for supernet training (Phase 1)"""
     return SearchableMobileNetV2(num_classes, width_multipliers, early_exit_location, num_channels)
 
 
 if __name__ == '__main__':
-    # Test the searchable model
     model = searchable_mobilenet_v2(
         num_classes=100,
-        width_multipliers=[1.0] * 8,  # Max width for all 8 stages
+        width_multipliers=[1.0] * 8,
         early_exit_location=None,
-        num_channels=3
+        num_channels=3,
     )
     print(model)
 
-    # Test forward pass
     data = torch.rand(2, 3, 32, 32)
     output = model(data)
     print(f"Output shape: {output.shape}")
 
-    # Test with early exit
     model_with_exit = searchable_mobilenet_v2(
         num_classes=100,
-        width_multipliers=[1.0] * 8,  # 8 stages: [32,16,24,32,64,96,160(x3),320]
-        early_exit_location=4,
-        num_channels=3
+        width_multipliers=[1.0] * 8,
+        early_exit_location=10,
+        num_channels=3,
     )
     output_early = model_with_exit(data)
     print(f"Early exit output: {[o.shape for o in output_early]}")

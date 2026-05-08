@@ -6,6 +6,30 @@ import torch
 import torch.nn as nn
 
 
+def _reshape_affine_param(param, x, channel_dim):
+    if param is None:
+        return None
+    if param.ndim != 1 or x.ndim <= 1:
+        return param
+
+    resolved_dim = channel_dim if channel_dim >= 0 else x.ndim + channel_dim
+    view_shape = [1] * x.ndim
+    view_shape[resolved_dim] = param.shape[0]
+    return param.view(*view_shape)
+
+
+def _apply_affine_proxy(x, module, channel_dim):
+    weight = _reshape_affine_param(getattr(module, 'weight', None), x, channel_dim)
+    bias = _reshape_affine_param(getattr(module, 'bias', None), x, channel_dim)
+
+    x_ = x
+    if weight is not None:
+        x_ = x_ + weight
+    if bias is not None:
+        x_ = x_ + bias
+    return x_
+
+
 def filter(x, dim=1, scale=1., target_shape=None, model_name=None, split=0):
     # Filter out tensor elements after vertical splitting\
     if target_shape is None:
@@ -43,7 +67,9 @@ def is_leaf(model):
 
 def get_downscale_index(model, args, scale=1.):
     # dim carries width
-    if 'bert' in str(model.__class__):
+    class_name = str(model.__class__).lower()
+    is_sequence_model = 'bert' in class_name or 'vit' in class_name
+    if is_sequence_model:
         dim = 2
     else:
         dim = 1
@@ -66,7 +92,8 @@ def get_downscale_index(model, args, scale=1.):
     def modify_forward(model, local_model, split=1):
         # attach hooks
 
-        if 'bert' in str(model.__class__) and 'classifiers' not in str(model.__class__):
+        model_class = str(model.__class__).lower()
+        if is_sequence_model and 'classifiers' not in model_class:
             include_linear = True
         else:
             include_linear = False
@@ -80,8 +107,15 @@ def get_downscale_index(model, args, scale=1.):
                         # prevent side-effects in normalization and activation
                         if 'BatchNorm2d' in m._get_name():
                             x_ = x + m.weight[None, :, None, None] + m.bias[None, :, None, None]
-                        elif 'BatchNorm1d' in m._get_name() or 'LayerNorm' in m._get_name():
-                            x_ = x + m.weight + m.bias
+                        elif 'BatchNorm1d' in m._get_name():
+                            x_ = _apply_affine_proxy(x, m, channel_dim=1 if x.ndim > 1 else -1)
+                        elif 'LayerNorm' in m._get_name():
+                            if getattr(m, 'data_format', None) == 'channels_first' and x.ndim >= 2:
+                                x_ = _apply_affine_proxy(x, m, channel_dim=1)
+                            else:
+                                x_ = _apply_affine_proxy(x, m, channel_dim=x.ndim - 1)
+                        elif 'GRN' in m._get_name():
+                            x_ = x + m.gamma + m.beta
                         elif 'GELU' in m._get_name() or 'Softmax' in m._get_name():
                             x_ = x
                         else:
@@ -89,10 +123,11 @@ def get_downscale_index(model, args, scale=1.):
 
                         if include_linear:
                             if any([n in m._get_name() for n in
-                                    ['Conv', 'BatchNorm', 'LayerNorm', 'Linear', 'Embedding']]):
-                                x_ = filter(x_, dim=dim, target_shape=ls, model_name=m._get_name(), split=split)
+                                    ['Conv', 'BatchNorm', 'LayerNorm', 'Linear', 'Embedding', 'GRN']]):
+                                filter_dim = 1 if 'Conv' in m._get_name() and x_.ndim == 4 else dim
+                                x_ = filter(x_, dim=filter_dim, target_shape=ls, model_name=m._get_name(), split=split)
                         else:
-                            if any([n in m._get_name() for n in ['Conv', 'BatchNorm', 'LayerNorm', 'Embedding']]):
+                            if any([n in m._get_name() for n in ['Conv', 'BatchNorm', 'LayerNorm', 'Embedding', 'GRN']]):
                                 x_ = filter(x_, dim=dim, target_shape=ls, split=split)
 
                         return x_

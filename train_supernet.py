@@ -8,6 +8,8 @@ import os
 from models.searchable_resnet import SearchableResNet
 from models.searchable_vgg import searchable_vgg16
 from models.searchable_mobilenet import searchable_mobilenet_v2
+from models.searchable_convnext import searchable_convnext
+from models.searchable_vit import searchable_vit_small
 from data_tools.dataloader import get_dataloaders, get_datasets
 from args import arg_parser, modify_args
 
@@ -40,6 +42,10 @@ def train_supernet(args):
     if hasattr(args, 'arch') and args.arch:
         if 'mobilenet' in args.arch.lower():
             model_type = 'mobilenet'
+        elif 'convnext' in args.arch.lower():
+            model_type = 'convnext'
+        elif 'vit' in args.arch.lower():
+            model_type = 'vit'
         elif 'resnet' in args.arch.lower():
             model_type = 'resnet'
         elif 'vgg' in args.arch.lower():
@@ -68,11 +74,31 @@ def train_supernet(args):
             width_multipliers=[1.0] * 8,  # Max width for 8 stages (MobileNetV2 architecture)
             num_channels=3
         ).to(device)
+    elif model_type == 'convnext':
+        supernet = searchable_convnext(
+            num_classes=args.num_classes,
+            width_multipliers=[1.0] * 4,
+            num_channels=3
+        ).to(device)
+    elif model_type == 'vit':
+        image_size = args.image_size[0] if hasattr(args, 'image_size') else 32
+        supernet = searchable_vit_small(
+            num_classes=args.num_classes,
+            width_multipliers=[1.0] * 12,
+            num_channels=3,
+            image_size=image_size,
+            pretrained=True
+        ).to(device)
     else:
-        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet'")
+        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet', 'convnext', 'vit'")
     
     # 3. Define optimizer, scheduler, and loss function
-    optimizer = optim.SGD(supernet.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    if model_type == 'vit':
+        if args.lr == 0.1:
+            args.lr = 5e-4
+        optimizer = optim.AdamW(supernet.parameters(), lr=args.lr, weight_decay=0.05)
+    else:
+        optimizer = optim.SGD(supernet.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
     criterion = nn.CrossEntropyLoss()
 

@@ -20,6 +20,14 @@ from datetime import datetime
 from models.searchable_resnet import SearchableResNet
 from models.searchable_vgg import searchable_vgg16
 from models.searchable_mobilenet import searchable_mobilenet_v2
+from models.searchable_convnext import searchable_convnext
+from models.searchable_vit import (
+    VIT_DEPTH,
+    VIT_NUM_STAGES,
+    VIT_SEARCH_EXIT_LOCATIONS,
+    VIT_WIDTH_OPTIONS,
+    searchable_vit_small,
+)
 from utils.metrics import calculate_total_conv_nuclear_norm, calculate_model_size
 from utils.op_counter import measure_model
 
@@ -55,7 +63,12 @@ def expand_vgg_stage_multipliers(stage_multipliers: List[float]) -> List[float]:
 
     return layer_multipliers
 
-def create_searchable_model(model_type: str, num_classes: int, width_multipliers: List[float], early_exit_location: int = None):
+def create_searchable_model(
+        model_type: str,
+        num_classes: int,
+        width_multipliers: List[float],
+        early_exit_location: int = None,
+        image_size: int = 224):
     """Create a searchable model based on model type"""
     model_type = model_type.lower()
 
@@ -79,14 +92,46 @@ def create_searchable_model(model_type: str, num_classes: int, width_multipliers
             early_exit_location=early_exit_location
         )
     elif model_type == 'mobilenet':
-        # MobileNetV2 uses 7 stage multipliers
+        # MobileNetV2 uses 8 width stages and 17 bottleneck-level exit locations.
         return searchable_mobilenet_v2(
             num_classes=num_classes,
             width_multipliers=width_multipliers,
             early_exit_location=early_exit_location
         )
+    elif model_type == 'convnext':
+        return searchable_convnext(
+            num_classes=num_classes,
+            width_multipliers=width_multipliers,
+            early_exit_location=early_exit_location
+        )
+    elif model_type == 'vit':
+        return searchable_vit_small(
+            num_classes=num_classes,
+            width_multipliers=width_multipliers,
+            early_exit_location=early_exit_location,
+            image_size=image_size
+        )
     else:
-        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet'")
+        raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet', 'convnext', 'vit'")
+
+
+def calculate_vit_token_nuclear_norm(model: nn.Module, probe_input: torch.Tensor, early_exit_location: int) -> float:
+    """
+    ViT analogue of feature-map nuclear norm.
+    The representation matrix is formed from all batch tokens at the target exit.
+    """
+    if not hasattr(model, "extract_tokens_to_exit"):
+        raise ValueError("ViT model must expose extract_tokens_to_exit for token nuclear norm")
+
+    model.eval()
+    with torch.no_grad():
+        tokens = model.extract_tokens_to_exit(probe_input, early_exit_location=early_exit_location)
+        if tokens.dim() != 3:
+            raise ValueError(f"Expected token tensor [B, N, D], got shape {tuple(tokens.shape)}")
+        token_matrix = tokens.reshape(-1, tokens.shape[-1]).float()
+        token_matrix = token_matrix - token_matrix.mean(dim=0, keepdim=True)
+        _, singular_values, _ = torch.linalg.svd(token_matrix, full_matrices=False)
+    return torch.sum(singular_values).item()
 
 @dataclass
 class ArchConfig:
@@ -121,30 +166,47 @@ class ArchitectureSearchEnv(gym.Env):
                  num_classes: int = 100,
                  width_options: List[float] = None,
                  exit_location_range: Tuple[int, int] = None,
-                 num_stages: int = None):
+                 num_stages: int = None,
+                 image_size: int = 32):
         
         super().__init__()
 
         self.supernet_state_dict = supernet_state_dict
         self.model_type = model_type.lower()
         self.num_classes = num_classes
-        self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
+        self.image_size = image_size
 
         # Set model-specific defaults
         if self.model_type == "resnet":
+            self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
             self.exit_location_range = exit_location_range or (28, 54)
             self.num_stages = num_stages or 3
         elif self.model_type == "vgg":
+            self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
             self.exit_location_range = exit_location_range or (4, 13)  # Conv layers 4-12 (stages 2-4 complete coverage)
             self.num_stages = num_stages or 6  # 5 conv stages + 1 FC stage: [64,64], [128,128], [256,256,256], [512,512,512], [512,512,512], [FC,FC]
         elif self.model_type == "mobilenet":
-            self.exit_location_range = exit_location_range or (3, 8)  # Blocks 3-8 (out of 9 blocks: 0-8)
+            self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
+            self.exit_location_range = exit_location_range or (3, 17)  # bottleneck exits 3-16
             self.num_stages = num_stages or 8  # 8 stages: [32, 16, 24, 32, 64, 96, 160, 320]
+        elif self.model_type == "convnext":
+            self.width_options = width_options or np.linspace(0.5, 1.0, 10).tolist()
+            self.exit_location_range = exit_location_range or (0, 4)  # 4 stage exits, final classifier is separate
+            self.num_stages = num_stages or 4
+        elif self.model_type == "vit":
+            self.width_options = width_options or list(VIT_WIDTH_OPTIONS)
+            self.exit_location_range = exit_location_range or (VIT_SEARCH_EXIT_LOCATIONS[0], VIT_DEPTH + 1)
+            self.num_stages = num_stages or VIT_NUM_STAGES
         else:
             raise ValueError(f"Unsupported model type: {self.model_type}")
 
         self.exit_location_range = self.exit_location_range
         self.num_stages = self.num_stages
+        if self.model_type == "vit":
+            generator = torch.Generator().manual_seed(0)
+            self.probe_input = torch.randn(8, 3, self.image_size, self.image_size, generator=generator)
+        else:
+            self.probe_input = None
         
         # Define action and observation spaces
         self._define_spaces()
@@ -244,12 +306,13 @@ class ArchitectureSearchEnv(gym.Env):
             model_type=self.model_type,
             num_classes=self.num_classes,
             width_multipliers=width_multipliers,
-            early_exit_location=exit_location
+            early_exit_location=exit_location,
+            image_size=self.image_size
         )
         subnet.eval()
 
         # Calculate FLOPs using op_counter (fair comparison without pretrained weights)
-        cls_ops, cls_params = measure_model(subnet, H=32, W=32, exit_idx=0)
+        cls_ops, cls_params = measure_model(subnet, H=self.image_size, W=self.image_size, exit_idx=0)
         flops_m = cls_ops[0] / 1e6 if cls_ops else 0.0
 
         # For nuclear norm calculation, we still need pretrained weights
@@ -258,12 +321,20 @@ class ArchitectureSearchEnv(gym.Env):
             model_type=self.model_type,
             num_classes=self.num_classes,
             width_multipliers=width_multipliers,
-            early_exit_location=exit_location
+            early_exit_location=exit_location,
+            image_size=self.image_size
         )
         sliced_state_dict = self._get_sub_network_state_dict(pretrained_subnet)
         pretrained_subnet.load_state_dict(sliced_state_dict)
-        
-        nuclear_norm = calculate_total_conv_nuclear_norm(pretrained_subnet, early_exit_location=exit_location)
+
+        if self.model_type == "vit":
+            nuclear_norm = calculate_vit_token_nuclear_norm(
+                pretrained_subnet,
+                self.probe_input,
+                early_exit_location=exit_location,
+            )
+        else:
+            nuclear_norm = calculate_total_conv_nuclear_norm(pretrained_subnet, early_exit_location=exit_location)
         num_params = calculate_model_size(subnet, early_exit_location=exit_location)
         
         # For VGG, ensure we save the expanded 15-element multipliers for compatibility
@@ -291,17 +362,15 @@ class ArchitectureSearchEnv(gym.Env):
                 if supernet_param.shape == subnet_param.shape:
                     subnet_param.data.copy_(supernet_param.data)
                 else:
-                    # Handle shape mismatch (width scaling)
-                    if supernet_param.dim() > 1:  # Conv layers
-                        min_dim0 = min(supernet_param.shape[0], subnet_param.shape[0])
-                        min_dim1 = min(supernet_param.shape[1], subnet_param.shape[1])
-                        sliced_param = supernet_param[:min_dim0, :min_dim1, ...]
-                        
+                    # Handle width scaling for Conv/Linear/Norm/positional tensors.
+                    if supernet_param.dim() == subnet_param.dim():
+                        slices = tuple(
+                            slice(0, min(src, dst))
+                            for src, dst in zip(supernet_param.shape, subnet_param.shape)
+                        )
+                        sliced_param = supernet_param[slices]
                         if sliced_param.shape == subnet_param.shape:
                             subnet_param.data.copy_(sliced_param)
-                    else:  # BN/Linear layers
-                        min_dim0 = min(supernet_param.shape[0], subnet_param.shape[0])
-                        subnet_param.data.copy_(supernet_param[:min_dim0])
         
         return subnet_state_dict
     
@@ -334,13 +403,23 @@ class ArchitectureSearchEnv(gym.Env):
 class PPOArchitectureNetwork(nn.Module):
     """PPO Network for Architecture Search"""
     
-    def __init__(self, obs_dim: int, width_action_dim: int, exit_action_dim: int, exit_location_range: Tuple[int, int], hidden_dim: int = 128):
+    def __init__(
+            self,
+            obs_dim: int,
+            width_action_dim: int,
+            exit_action_dim: int,
+            exit_location_range: Tuple[int, int],
+            width_min: float = 0.5,
+            width_max: float = 1.0,
+            hidden_dim: int = 128):
         super().__init__()
         
         self.obs_dim = obs_dim
         self.width_action_dim = width_action_dim
         self.exit_action_dim = exit_action_dim
         self.exit_location_range = exit_location_range
+        self.width_min = width_min
+        self.width_max = width_max
         
         # Shared feature extractor
         self.feature_extractor = nn.Sequential(
@@ -375,7 +454,7 @@ class PPOArchitectureNetwork(nn.Module):
         
         # Width multipliers
         width_mean = torch.sigmoid(self.width_actor_mean(features))  # [0, 1]
-        width_mean = width_mean * 0.5 + 0.5  # Scale to [0.5, 1.0]
+        width_mean = width_mean * (self.width_max - self.width_min) + self.width_min
         width_logstd = self.width_actor_logstd.expand_as(width_mean)
         
         # Exit location
@@ -400,7 +479,7 @@ class PPOArchitectureNetwork(nn.Module):
             
             width_dist = torch.distributions.Normal(width_mean, exploration_std)
             width_action = width_dist.sample()
-            width_action = torch.clamp(width_action, 0.5, 1.0)
+            width_action = torch.clamp(width_action, self.width_min, self.width_max)
             
             # Temperature sampling for exit location with optional region constraint
             temperature = 1.0 + exploration_bonus
@@ -464,7 +543,14 @@ class PPOArchitectureAgent:
         width_action_dim = env.num_stages
         exit_action_dim = env.exit_location_range[1] - env.exit_location_range[0]
         
-        self.network = PPOArchitectureNetwork(obs_dim, width_action_dim, exit_action_dim, env.exit_location_range)
+        self.network = PPOArchitectureNetwork(
+            obs_dim,
+            width_action_dim,
+            exit_action_dim,
+            env.exit_location_range,
+            width_min=min(env.width_options),
+            width_max=max(env.width_options),
+        )
         self.optimizer = torch.optim.Adam(self.network.parameters(), lr=learning_rate)
         
         # Training data storage
@@ -500,8 +586,13 @@ class PPOArchitectureAgent:
             # VGG regions: stage 2, stage 3, stage 4 (complete stage coverage)
             self.region_boundaries = [(4, 6), (7, 9), (10, 12)]
         elif env.model_type == "mobilenet":
-            # MobileNetV2 regions: early, middle, late blocks
-            self.region_boundaries = [(3, 4), (5, 6), (7, 8)]
+            # MobileNetV2 regions over bottleneck exits.
+            self.region_boundaries = [(3, 7), (8, 12), (13, 16)]
+        elif env.model_type == "convnext":
+            # ConvNeXt regions: early, middle, late stage exits
+            self.region_boundaries = [(0, 0), (1, 1), (2, 3)]
+        elif env.model_type == "vit":
+            self.region_boundaries = [(3, 5), (6, 8), (9, 12)]
         else:
             # Default to resnet boundaries
             self.region_boundaries = [(28, 35), (36, 44), (45, 53)]
@@ -794,6 +885,133 @@ class PPOArchitectureAgent:
         self.experiences = []
 
 
+def _dataset_num_classes_and_image_size(dataset: str) -> Tuple[int, int]:
+    if dataset == 'cifar10':
+        return 10, 32
+    if dataset == 'cifar100':
+        return 100, 32
+    if dataset == 'tiny_imagenet':
+        return 200, 64
+    if dataset == 'imagenet':
+        return 1000, 224
+    if dataset == 'sst2':
+        return 2, 32
+    if dataset == 'ag_news':
+        return 4, 32
+    print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes and 32x32 images")
+    return 100, 32
+
+
+def _load_matching_weights(subnet_model, supernet_state_dict: Dict) -> Dict:
+    subnet_state_dict = subnet_model.state_dict()
+    for key, supernet_param in supernet_state_dict.items():
+        if key not in subnet_state_dict:
+            continue
+        subnet_param = subnet_state_dict[key]
+        if supernet_param.shape == subnet_param.shape:
+            subnet_param.data.copy_(supernet_param.data)
+            continue
+        if supernet_param.dim() == subnet_param.dim():
+            slices = tuple(slice(0, min(src, dst)) for src, dst in zip(supernet_param.shape, subnet_param.shape))
+            sliced_param = supernet_param[slices]
+            if sliced_param.shape == subnet_param.shape:
+                subnet_param.data.copy_(sliced_param)
+    return subnet_state_dict
+
+
+def generate_vit_architecture_library(
+        supernet_path: str,
+        output_path: str,
+        dataset: str = "cifar10") -> List[Dict]:
+    """
+    Generate a deterministic ViT-Small architecture library over the same
+    width and exit search space used by the generic Stage 2 search.
+    """
+    start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    print(f"=== ViT-Small Width/Depth Library Generation [{start_time}] ===")
+    print("Backbone: timm vit_small_patch16_224")
+    print(f"Search space: widths {list(VIT_WIDTH_OPTIONS)}, exits after blocks {list(VIT_SEARCH_EXIT_LOCATIONS)}")
+
+    try:
+        supernet_state_dict = torch.load(supernet_path, map_location='cpu')
+        print("[OK] Supernet loaded successfully")
+    except Exception as e:
+        print(f"[ERROR] Failed to load supernet: {e}")
+        return []
+
+    num_classes, image_size = _dataset_num_classes_and_image_size(dataset)
+    all_configs = []
+
+    generator = torch.Generator().manual_seed(0)
+    probe_input = torch.randn(8, 3, image_size, image_size, generator=generator)
+
+    for width in VIT_WIDTH_OPTIONS:
+        for exit_location in VIT_SEARCH_EXIT_LOCATIONS:
+            stage_widths = [width] * VIT_NUM_STAGES
+            subnet = create_searchable_model(
+                model_type="vit",
+                num_classes=num_classes,
+                width_multipliers=stage_widths,
+                early_exit_location=exit_location,
+                image_size=image_size,
+            )
+            subnet.eval()
+
+            cls_ops, _ = measure_model(subnet, H=image_size, W=image_size, exit_idx=0)
+            flops_m = cls_ops[0] / 1e6 if cls_ops else 0.0
+
+            pretrained_subnet = create_searchable_model(
+                model_type="vit",
+                num_classes=num_classes,
+                width_multipliers=stage_widths,
+                early_exit_location=exit_location,
+                image_size=image_size,
+            )
+            pretrained_subnet.load_state_dict(_load_matching_weights(pretrained_subnet, supernet_state_dict))
+            nuclear_norm = calculate_vit_token_nuclear_norm(
+                pretrained_subnet,
+                probe_input,
+                early_exit_location=exit_location,
+            )
+            num_params = calculate_model_size(subnet, early_exit_location=exit_location)
+
+            config = ArchConfig(
+                width_multipliers=stage_widths,
+                early_exit_location=exit_location,
+                flops_m=flops_m,
+                total_conv_nuclear_norm=nuclear_norm,
+                num_params=num_params,
+            )
+            all_configs.append(config.to_dict())
+            print(
+                f"[OK] width={width:.4f}, exit={exit_location}, FLOPs={flops_m:.2f}M, "
+                f"norm={nuclear_norm:.2f}, params={num_params}"
+            )
+
+    config_with_metadata = {
+        "metadata": {
+            "model_type": "vit",
+            "dataset": dataset,
+            "num_classes": num_classes,
+            "search_method": "alignfl_width_depth_vit",
+            "backbone": "vit_small_patch16_224",
+            "exit_granularity": "transformer_block",
+            "width_options": list(VIT_WIDTH_OPTIONS),
+            "exit_locations": list(VIT_SEARCH_EXIT_LOCATIONS),
+            "total_configs": len(all_configs),
+        },
+        "configurations": all_configs,
+    }
+
+    with open(output_path, 'w') as f:
+        json.dump(config_with_metadata, f, indent=4)
+
+    print(f"\n=== ViT Configuration Library Saved ===")
+    print(f"Generated {len(all_configs)} width/depth configurations")
+    print(f"Saved to: {output_path}")
+    return all_configs
+
+
 def generate_architecture_library(supernet_path: str,
                                 output_path: str = 'ppo_architecture_library.json',
                                 num_architectures: int = 500,
@@ -812,7 +1030,6 @@ def generate_architecture_library(supernet_path: str,
     Returns:
         List of architecture configurations
     """
-    
     start_time_obj = datetime.now()
     start_time = start_time_obj.strftime("%Y-%m-%d %H:%M:%S")
     print(f"=== PPO Architecture Library Generation [{start_time}] ===")
@@ -850,12 +1067,14 @@ def generate_architecture_library(supernet_path: str,
         # Default fallback
         print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes")
         num_classes = 100
+    image_size = 64 if dataset == 'tiny_imagenet' else 32
 
     # Create environment and agent
     env = ArchitectureSearchEnv(
         supernet_state_dict,
         model_type=model_type,
-        num_classes=num_classes
+        num_classes=num_classes,
+        image_size=image_size
     )
     agent = PPOArchitectureAgent(env)
     
@@ -865,11 +1084,11 @@ def generate_architecture_library(supernet_path: str,
     all_configs = []
     seen_configs = set()  # Avoid duplicates
 
-    # Generate architectures for fixed number of batches
+    # Generate architectures until the requested target is reached.
     batch = 0
-    max_batches = 1000  # Main termination condition
+    max_batches = 1000  # Safety cap for duplicate-heavy searches.
 
-    while batch < max_batches:
+    while batch < max_batches and len(all_configs) < num_architectures:
         batch += 1
         
         # Choose search region using hybrid strategy
@@ -897,7 +1116,10 @@ def generate_architecture_library(supernet_path: str,
             if config_id not in seen_configs:
                 seen_configs.add(config_id)
                 config_dict = config.to_dict()
-                all_configs.append(config_dict)
+                if len(all_configs) < num_architectures:
+                    all_configs.append(config_dict)
+                else:
+                    break
                 new_configs_count += 1
                 
                 print(f"[OK] Generated: width={[f'{w:.2f}' for w in config.width_multipliers]}, "
@@ -940,10 +1162,10 @@ def generate_architecture_library(supernet_path: str,
     seconds = int(total_seconds % 60)
 
     print(f"\n=== PPO Search Completed [{end_time}] ===")
-    print(f"Completed {max_batches} batches")
+    print(f"Completed {batch} batches")
     print(f"Generated {len(all_configs)} unique configurations")
     print(f"Total time: {hours}h {minutes}m {seconds}s ({total_seconds:.1f} seconds)")
-    avg_per_batch = len(all_configs) / max_batches if max_batches > 0 else 0
+    avg_per_batch = len(all_configs) / batch if batch > 0 else 0
     print(f"Average {avg_per_batch:.1f} unique configs per batch")
     configs_per_second = len(all_configs) / total_seconds if total_seconds > 0 else 0
     print(f"Speed: {configs_per_second:.2f} configs/second")
@@ -954,7 +1176,12 @@ def generate_architecture_library(supernet_path: str,
             "model_type": model_type,
             "dataset": dataset,
             "num_classes": num_classes,
+            "search_method": "ppo",
+            "architecture_space": "vit_stage_mlp_width" if model_type.lower() == "vit" else "stage_width",
+            "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
             "generation_timestamp": str(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
+            "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
+            "exit_location_range": list(env.exit_location_range),
             "total_configs": len(all_configs)
         },
         "configurations": all_configs
@@ -966,7 +1193,7 @@ def generate_architecture_library(supernet_path: str,
     
     print(f"\n=== Configuration Library Saved ===")
     print(f"Generated {len(all_configs)} unique architecture configurations")
-    print(f"Completed {max_batches} batches with {avg_per_batch:.1f} configs/batch")
+    print(f"Completed {batch} batches with {avg_per_batch:.1f} configs/batch")
     print(f"Saved to: {output_path}")
     if all_configs:
         print(f"Range of FLOPs: {min(c['flops_m'] for c in all_configs):.1f}M - {max(c['flops_m'] for c in all_configs):.1f}M")
@@ -986,7 +1213,6 @@ def generate_random_architecture_library(supernet_path: str,
     This is the true random baseline - completely uniform sampling without any
     gradient-based optimization, reward guidance, or diversity mechanisms.
     """
-
     print("=== PURE RANDOM SEARCH (Baseline) ===")
     print("No optimization, no reward, no PPO - just uniform random sampling")
 
@@ -1021,7 +1247,7 @@ def generate_random_architecture_library(supernet_path: str,
         num_classes = 100
 
     # Set model-specific parameters
-    width_options = np.linspace(0.5, 1.0, 10).tolist()
+    width_options = list(VIT_WIDTH_OPTIONS) if model_type.lower() == "vit" else np.linspace(0.5, 1.0, 10).tolist()
 
     if model_type.lower() == "resnet":
         exit_location_range = (28, 54)
@@ -1030,8 +1256,14 @@ def generate_random_architecture_library(supernet_path: str,
         exit_location_range = (4, 13)
         num_stages = 6
     elif model_type.lower() == "mobilenet":
-        exit_location_range = (3, 9)
+        exit_location_range = (3, 17)
         num_stages = 8
+    elif model_type.lower() == "convnext":
+        exit_location_range = (0, 4)
+        num_stages = 4
+    elif model_type.lower() == "vit":
+        exit_location_range = (VIT_SEARCH_EXIT_LOCATIONS[0], VIT_DEPTH + 1)
+        num_stages = VIT_NUM_STAGES
     else:
         raise ValueError(f"Unsupported model type: {model_type}")
 
@@ -1042,7 +1274,8 @@ def generate_random_architecture_library(supernet_path: str,
         num_classes=num_classes,
         width_options=width_options,
         exit_location_range=exit_location_range,
-        num_stages=num_stages
+        num_stages=num_stages,
+        image_size=64 if dataset == 'tiny_imagenet' else 32,
     )
 
     all_configs = []
@@ -1113,6 +1346,10 @@ def generate_random_architecture_library(supernet_path: str,
             "dataset": dataset,
             "num_classes": num_classes,
             "search_method": "pure_random_search",
+            "architecture_space": "vit_stage_mlp_width" if model_type.lower() == "vit" else "stage_width",
+            "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
+            "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
+            "exit_location_range": list(exit_location_range),
             "total_configs": len(all_configs),
             "theoretical_max": theoretical_max,
             "coverage_percent": len(all_configs)/theoretical_max*100,

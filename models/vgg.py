@@ -175,7 +175,10 @@ class VGG(nn.Module):
 
             if getattr(args, 'enable_tdd', 0) == 1:
                 growth_configs = find_all_growth_configs(
-                    best_configs_for_round, all_model_configs, model_type="vgg"
+                    best_configs_for_round,
+                    all_model_configs,
+                    model_type="vgg",
+                    growth_budget_scale=getattr(args, 'tdd_growth_budget_scale', 1.0)
                 )
                 growth_exit_locations = []
                 for growth_config in growth_configs.values():
@@ -203,9 +206,10 @@ class VGG(nn.Module):
         self.trs = trs
         self.ee_layer_locations = ee_layer_locations
 
-        # Update features with proper wide_scales
+        # Update conv backbone with proper wide_scales
         if hasattr(features, '_modules'):
-            # Recreate features with wide_scales (first 13 for conv layers)
+            # Recreate only the 13-layer conv trunk; early-exit locations are
+            # defined on this conv index space in both search and training code.
             cfg_copy = cfg['D'].copy()
             self.features = make_layers(cfg_copy, batch_norm=True, track_running_stats=trs,
                                       num_channels=num_channels, wide_scales=wide_scales[:13])
@@ -232,19 +236,18 @@ class VGG(nn.Module):
         else:
             dim = 256
 
-        if num_class == 200:
-            self.features[-1].append(nn.AdaptiveAvgPool2d((1, 1)))
-        self.features[-1].append(nn.Flatten(start_dim=1, end_dim=-1))
-        self.features.append(nn.Sequential(
+        self.avgpool = nn.AdaptiveAvgPool2d((1, 1))
+        self.flatten = nn.Flatten(start_dim=1, end_dim=-1)
+        self.fc1 = nn.Sequential(
             nn.Linear(int(512 * wide_scales[12]), int(dim * wide_scales[13])),  # 13th scale for first FC
             nn.LayerNorm(int(dim * wide_scales[13])),
             nn.ReLU(inplace=True),
-            nn.Dropout()))
-        self.features.append(nn.Sequential(
+            nn.Dropout())
+        self.fc2 = nn.Sequential(
             nn.Linear(int(dim * wide_scales[13]), int(dim * wide_scales[14])),  # 14th scale for second FC
             nn.LayerNorm(int(dim * wide_scales[14])),
             nn.ReLU(inplace=True),
-            nn.Dropout()))
+            nn.Dropout())
         self.classifier = nn.Linear(int(dim * wide_scales[14]), num_class)  # Final FC uses 15th scale
 
     def _map_logical_layer_to_features_idx(self, logical_layer_idx):
@@ -289,6 +292,10 @@ class VGG(nn.Module):
 
         # Execute all layers for largest model or when no early exit is triggered
         preds = ee_outs
+        output = self.avgpool(output)
+        output = self.flatten(output)
+        output = self.fc1(output)
+        output = self.fc2(output)
         final_output = self.classifier(output)
         preds.append(final_output)
 

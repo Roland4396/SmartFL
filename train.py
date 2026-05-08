@@ -12,7 +12,31 @@ import torch
 from utils.utils import adjust_learning_rate, accuracy, AverageMeter
 
 
-def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args, train_params, h_level, level, global_model=None, is_growth_mode=False):
+def _filter_outputs_for_training(model, output, selected_exit_locations=None, include_final_output=False):
+    if selected_exit_locations is None or not isinstance(output, list):
+        return output
+
+    ee_layer_locations = list(getattr(model, 'ee_layer_locations', []))
+    if not ee_layer_locations:
+        return output
+
+    selected_exit_locations = set(selected_exit_locations)
+    has_final_output = len(output) == len(ee_layer_locations) + 1
+    early_outputs = output[:-1] if has_final_output else output
+
+    filtered_output = [
+        out for exit_loc, out in zip(ee_layer_locations, early_outputs)
+        if exit_loc in selected_exit_locations
+    ]
+
+    if include_final_output and has_final_output:
+        filtered_output.append(output[-1])
+
+    return filtered_output if filtered_output else output
+
+
+def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args, train_params, h_level, level,
+                  global_model=None, is_growth_mode=False, selected_exit_locations=None, include_final_output=False):
     batch_time = AverageMeter()
     data_time = AverageMeter()
     losses = AverageMeter()
@@ -41,6 +65,13 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
 
         if not isinstance(output, list):
             output = [output]
+
+        output = _filter_outputs_for_training(
+            model,
+            output,
+            selected_exit_locations=selected_exit_locations,
+            include_final_output=include_final_output,
+        )
 
         loss = 0.0
         if is_growth_mode:
@@ -140,12 +171,13 @@ def execute_epoch(model, train_loader, criterion, optimizer, round, epoch, args,
         end = time.time()
 
         if i % args.print_freq == 0:
+            last_output_idx = len(output) - 1
             print(f'Epoch: [{epoch}][{i + 1}/{len(train_loader)}]\t\t' +
                   f'Exit: {len(output)}\t' +
                   f'Time: {batch_time.avg:.3f}\t' +
                   f'Data: {data_time.avg:.3f}\t' +
                   f'Loss: {losses.val:.4f}\t ' +
-                  f'Acc@1: {top1[-1].val:.4f}\t' +
-                  f'Acc@5: {top5[-1].val:.4f}')
+                  f'Acc@1: {top1[last_output_idx].val:.4f}\t' +
+                  f'Acc@5: {top5[last_output_idx].val:.4f}')
 
     return losses.avg
