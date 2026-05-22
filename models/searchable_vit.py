@@ -8,6 +8,7 @@ except ImportError as exc:
 
 
 TIMM_VIT_MODEL = "vit_small_patch16_224"
+VIT_INPUT_SIZE = 224
 VIT_DEPTH = 12
 VIT_EMBED_DIM = 384
 VIT_HEAD_DIM = 64

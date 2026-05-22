@@ -23,6 +23,7 @@ from models.searchable_mobilenet import searchable_mobilenet_v2
 from models.searchable_convnext import searchable_convnext
 from models.searchable_vit import (
     VIT_DEPTH,
+    VIT_INPUT_SIZE,
     VIT_NUM_STAGES,
     VIT_SEARCH_EXIT_LOCATIONS,
     VIT_WIDTH_OPTIONS,
@@ -919,6 +920,13 @@ def _dataset_num_classes_and_image_size(dataset: str) -> Tuple[int, int]:
     return 100, 32
 
 
+def _dataset_num_classes_and_search_image_size(dataset: str, model_type: str) -> Tuple[int, int]:
+    num_classes, image_size = _dataset_num_classes_and_image_size(dataset)
+    if model_type.lower() == "vit":
+        return num_classes, VIT_INPUT_SIZE
+    return num_classes, image_size
+
+
 def _load_matching_weights(subnet_model, supernet_state_dict: Dict) -> Dict:
     subnet_state_dict = subnet_model.state_dict()
     for key, supernet_param in supernet_state_dict.items():
@@ -963,7 +971,7 @@ def generate_vit_architecture_library(
         print(f"[ERROR] Failed to load supernet: {e}")
         return []
 
-    num_classes, image_size = _dataset_num_classes_and_image_size(dataset)
+    num_classes, image_size = _dataset_num_classes_and_search_image_size(dataset, "vit")
     all_configs = []
 
     generator = torch.Generator().manual_seed(0)
@@ -1020,6 +1028,9 @@ def generate_vit_architecture_library(
             "search_method": "alignfl_width_depth_vit",
             "backbone": "vit_small_patch16_224",
             "architecture_space": "vit_stage_hidden_width",
+            "image_size": image_size,
+            "flops_image_size": image_size,
+            "nuclear_norm_image_size": image_size,
             "exit_granularity": "transformer_block",
             "width_options": list(VIT_WIDTH_OPTIONS),
             "exit_locations": list(VIT_SEARCH_EXIT_LOCATIONS),
@@ -1075,24 +1086,7 @@ def generate_architecture_library(supernet_path: str,
     print(f"Model type: {model_type}")
     print(f"Dataset: {dataset}")
 
-    # Determine number of classes based on dataset (matching args.py logic)
-    if dataset == 'cifar10':
-        num_classes = 10
-    elif dataset == 'cifar100':
-        num_classes = 100
-    elif dataset == 'imagenet':
-        num_classes = 1000
-    elif dataset == 'tiny_imagenet':
-        num_classes = 200
-    elif dataset == 'sst2':
-        num_classes = 2
-    elif dataset == 'ag_news':
-        num_classes = 4
-    else:
-        # Default fallback
-        print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes")
-        num_classes = 100
-    image_size = 64 if dataset == 'tiny_imagenet' else 32
+    num_classes, image_size = _dataset_num_classes_and_search_image_size(dataset, model_type)
 
     # Create environment and agent
     env = ArchitectureSearchEnv(
@@ -1204,6 +1198,9 @@ def generate_architecture_library(supernet_path: str,
             "search_method": "ppo",
             "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
+            "image_size": image_size,
+            "flops_image_size": image_size,
+            "nuclear_norm_image_size": image_size,
             "generation_timestamp": str(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
             "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
             "exit_location_range": list(env.exit_location_range),
@@ -1254,22 +1251,7 @@ def generate_random_architecture_library(supernet_path: str,
     print(f"Model type: {model_type}")
     print(f"Dataset: {dataset}")
 
-    # Determine number of classes
-    if dataset == 'cifar10':
-        num_classes = 10
-    elif dataset == 'cifar100':
-        num_classes = 100
-    elif dataset == 'imagenet':
-        num_classes = 1000
-    elif dataset == 'tiny_imagenet':
-        num_classes = 200
-    elif dataset == 'sst2':
-        num_classes = 2
-    elif dataset == 'ag_news':
-        num_classes = 4
-    else:
-        print(f"[WARN] Unknown dataset '{dataset}', defaulting to 100 classes")
-        num_classes = 100
+    num_classes, image_size = _dataset_num_classes_and_search_image_size(dataset, model_type)
 
     # Set model-specific parameters
     width_options = list(VIT_WIDTH_OPTIONS) if model_type.lower() == "vit" else np.linspace(0.5, 1.0, 10).tolist()
@@ -1300,7 +1282,7 @@ def generate_random_architecture_library(supernet_path: str,
         width_options=width_options,
         exit_location_range=exit_location_range,
         num_stages=num_stages,
-        image_size=64 if dataset == 'tiny_imagenet' else 32,
+        image_size=image_size,
     )
 
     all_configs = []
@@ -1373,6 +1355,9 @@ def generate_random_architecture_library(supernet_path: str,
             "search_method": "pure_random_search",
             "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
+            "image_size": image_size,
+            "flops_image_size": image_size,
+            "nuclear_norm_image_size": image_size,
             "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
             "exit_location_range": list(exit_location_range),
             "total_configs": len(all_configs),

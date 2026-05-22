@@ -52,14 +52,14 @@ ARCH_SPECS: dict[str, ArchSpec] = {
     "vit_small_4": ArchSpec(
         model="vit",
         artifact_prefix="vit_small",
-        flops_constraints=(13.5, 26.9, 53.8, 107.7),
-        params_constraints=(2.700, 5.399, 10.798, 21.596),
+        flops_constraints=(284.9, 730.1, 1797.0, 4252.8),
+        params_constraints=(2.700, 5.399, 10.798, 21.705),
     ),
     "vit_tiny_4": ArchSpec(
         model="vit",
         artifact_prefix="vit_small",
-        flops_constraints=(13.5, 26.9, 53.8, 107.7),
-        params_constraints=(2.700, 5.399, 10.798, 21.596),
+        flops_constraints=(284.9, 730.1, 1797.0, 4252.8),
+        params_constraints=(2.700, 5.399, 10.798, 21.705),
     ),
 }
 
@@ -425,6 +425,8 @@ def library_ready_for_arch(library_path: Path, arch: str) -> bool:
     if not configs:
         return False
     if metadata.get("architecture_space") != "vit_stage_hidden_width":
+        return False
+    if metadata.get("flops_image_size") != 224 or metadata.get("nuclear_norm_image_size") != 224:
         return False
     return any(len(cfg.get("width_multipliers", [])) == 4 for cfg in configs)
 
