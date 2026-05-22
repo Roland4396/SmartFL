@@ -5,6 +5,12 @@ import math
 import torch
 import torch.nn as nn
 
+try:
+    from models.searchable_vit import is_vit_qkv_bias_key, is_vit_qkv_weight_key, make_prefix_mask, make_vit_qkv_mask
+except Exception:
+    is_vit_qkv_bias_key = is_vit_qkv_weight_key = None
+    make_prefix_mask = make_vit_qkv_mask = None
+
 
 def _reshape_affine_param(param, x, channel_dim):
     if param is None:
@@ -65,7 +71,7 @@ def is_leaf(model):
     return get_num_gen(model.children()) == 0
 
 
-def get_downscale_index(model, args, scale=1.):
+def get_downscale_index(model, args, scale=1., width_multipliers_override=None):
     # dim carries width
     class_name = str(model.__class__).lower()
     is_sequence_model = 'bert' in class_name or 'vit' in class_name
@@ -161,7 +167,10 @@ def get_downscale_index(model, args, scale=1.):
     if args.use_gpu:
         copy_model = copy_model.cuda()
 
-    if 'scale' in model_kwargs.keys():
+    if width_multipliers_override is not None:
+        model_kwargs['scale'] = 1.0
+        model_kwargs['width_multipliers_override'] = width_multipliers_override
+    elif 'scale' in model_kwargs.keys():
         model_kwargs['scale'] = scale
     else:
         model_kwargs['params']['scale'] = scale
@@ -204,11 +213,38 @@ def get_downscale_index(model, args, scale=1.):
 
     state_dict = copy_model.state_dict(keep_vars=True)
     idx_dict = {}
+    local_state_dict = local_model.state_dict()
     for k, v in state_dict.items():
         if 'num_batches_tracked' in k:
             continue
 
-        if v.grad is None:
+        if (
+            make_vit_qkv_mask is not None
+            and k in local_state_dict
+            and (is_vit_qkv_weight_key(k) or is_vit_qkv_bias_key(k))
+            and tuple(v.shape) != tuple(local_state_dict[k].shape)
+        ):
+            idx_dict[k] = make_vit_qkv_mask(
+                tuple(v.shape),
+                tuple(local_state_dict[k].shape),
+                device=v.device,
+            )
+            if idx_dict[k] is None:
+                raise RuntimeError(f"Invalid ViT qkv mask shape for {k}: {tuple(v.shape)} -> {tuple(local_state_dict[k].shape)}")
+        elif (
+            make_prefix_mask is not None
+            and is_sequence_model
+            and k in local_state_dict
+            and tuple(v.shape) != tuple(local_state_dict[k].shape)
+        ):
+            idx_dict[k] = make_prefix_mask(
+                tuple(v.shape),
+                tuple(local_state_dict[k].shape),
+                device=v.device,
+            )
+            if idx_dict[k] is None:
+                idx_dict[k] = torch.ones_like(v, dtype=bool)
+        elif v.grad is None:
             idx_dict[k] = torch.ones_like(v, dtype=bool)
         else:
             idx_dict[k] = v.grad != 0

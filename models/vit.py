@@ -63,7 +63,8 @@ class ViTSmall(nn.Module):
         ee_layer_locations=None,
         args=None,
         image_size=224,
-        pretrained=True,
+        pretrained=False,
+        width_multipliers_override=None,
     ):
         super().__init__()
         self.stored_inp_kwargs = copy.deepcopy(locals())
@@ -83,6 +84,7 @@ class ViTSmall(nn.Module):
             image_size = args.image_size[0]
         self.stored_inp_kwargs["image_size"] = image_size
         self.stored_inp_kwargs["pretrained"] = False
+        pretrained = False
 
         if args.config_library_path is None:
             if hasattr(args, "arch") and args.arch and "vit" in args.arch:
@@ -131,10 +133,20 @@ class ViTSmall(nn.Module):
             wide_scales = [1.0] * 4
         else:
             normal_exit_locations = []
-            for level in sorted(best_configs_for_round.keys()):
-                config = best_configs_for_round[level]
+            sorted_configs = [
+                best_configs_for_round[level]
+                for level in sorted(best_configs_for_round.keys())
+            ]
+            for config in sorted_configs:
                 normal_exit_locations.append(config["early_exit_location"])
-            wide_scales = [config["width_multipliers"] for config in best_configs_for_round.values()][-1]
+            normalized_widths = [
+                _normalize_width_multipliers(config["width_multipliers"])
+                for config in sorted_configs
+            ]
+            wide_scales = [
+                max(widths[stage_idx] for widths in normalized_widths)
+                for stage_idx in range(4)
+            ]
             ee_loc_list = [loc for loc in normal_exit_locations[:-1] if loc < VIT_DEPTH]
 
             if getattr(args, "enable_tdd", 0) == 1:
@@ -164,13 +176,16 @@ class ViTSmall(nn.Module):
         self.pretrained = pretrained
         self.ee_layer_locations = ee_loc_list
         self.num_blocks = len(self.ee_layer_locations) + 1
+        if width_multipliers_override is not None:
+            wide_scales = width_multipliers_override
+            scale = 1.0
+        elif scale < 1.0:
+            wide_scales = [scale] * 4
         self.width_multipliers = _normalize_width_multipliers(wide_scales)
-        self.embed_dim = VIT_EMBED_DIM
 
         base = _create_vit_backbone(
             num_classes=num_classes,
             image_size=image_size,
-            embed_dim=self.embed_dim,
             pretrained=pretrained,
             width_multipliers=self.width_multipliers,
         )
@@ -182,15 +197,20 @@ class ViTSmall(nn.Module):
         self.patch_drop = base.patch_drop
         self.norm_pre = base.norm_pre
         self.block = nn.ModuleList(list(base.blocks))
+        self.transitions = base.transitions
         self.norm = base.norm
         self.fc_norm = base.fc_norm
         self.head_drop = base.head_drop
         self.classifier = base.head
+        self.stage_dims = base.stage_dims
+        self.block_dims = base.block_dims
+        self.embed_dim = base.embed_dim
+        self.final_embed_dim = base.final_embed_dim
 
         self.ee_classifiers = nn.ModuleList()
         self.exit_to_classifier_idx = {}
         for classifier_idx, exit_loc in enumerate(self.ee_layer_locations):
-            self.ee_classifiers.append(ViTExitHead(self.embed_dim, num_classes))
+            self.ee_classifiers.append(ViTExitHead(self.block_dims[exit_loc - 1], num_classes))
             self.exit_to_classifier_idx[exit_loc] = classifier_idx
 
     def _pos_embed(self, x):
@@ -211,14 +231,20 @@ class ViTSmall(nn.Module):
         x = self._pos_embed(x)
         x = self.patch_drop(x)
         x = self.norm_pre(x)
-        for block in self.block[:block_count]:
+        for block_idx, block in enumerate(self.block[:block_count], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                x = self.transitions[transition_key](x)
             x = block(x)
         return x
 
     def iter_nuclear_norm_modules(self, early_exit_location=None):
         block_count = VIT_DEPTH if early_exit_location is None else early_exit_location
         yield self.patch_embed.proj
-        for block in self.block[:block_count]:
+        for block_idx, block in enumerate(self.block[:block_count], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                yield self.transitions[transition_key]
             yield block.attn.qkv
             yield block.attn.proj
             yield block.mlp.fc1
@@ -232,7 +258,10 @@ class ViTSmall(nn.Module):
         total += sum(p.numel() for p in self.pos_drop.parameters())
         total += sum(p.numel() for p in self.patch_drop.parameters())
         total += sum(p.numel() for p in self.norm_pre.parameters())
-        for block in self.block[:early_exit_location]:
+        for block_idx, block in enumerate(self.block[:early_exit_location], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                total += sum(p.numel() for p in self.transitions[transition_key].parameters())
             total += sum(p.numel() for p in block.parameters())
 
         classifier_idx = self.exit_to_classifier_idx.get(early_exit_location)
@@ -253,6 +282,9 @@ class ViTSmall(nn.Module):
         x = self.norm_pre(x)
 
         for block_idx, block in enumerate(self.block, start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                x = self.transitions[transition_key](x)
             x = block(x)
             classifier_idx = self.exit_to_classifier_idx.get(block_idx)
             if classifier_idx is not None:

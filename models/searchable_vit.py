@@ -2,8 +2,7 @@ import torch
 import torch.nn as nn
 
 try:
-    import timm
-    from timm.models.vision_transformer import VisionTransformer
+    from timm.models.vision_transformer import Block
 except ImportError as exc:
     raise ImportError("ViT support requires timm. Install it in the active environment.") from exc
 
@@ -18,18 +17,26 @@ VIT_BASE_MLP_RATIO = 4.0
 VIT_MLP_HIDDEN_DIM = int(VIT_EMBED_DIM * VIT_BASE_MLP_RATIO)
 VIT_OFFICIAL_EXIT_LOCATIONS = (8, 9, 10, 11, 12)
 VIT_SEARCH_EXIT_LOCATIONS = tuple(range(3, VIT_DEPTH + 1))
-VIT_WIDTH_OPTIONS = (
-    0.125,
-    0.25,
-    1.0 / 3.0,
-    5.0 / 12.0,
-    0.5,
-    2.0 / 3.0,
-    0.75,
-    7.0 / 8.0,
-    11.0 / 12.0,
-    1.0,
+VIT_EMBED_DIM_OPTIONS = (
+    56,
+    72,
+    112,
+    136,
+    152,
+    160,
+    176,
+    192,
+    216,
+    224,
+    232,
+    256,
+    272,
+    296,
+    312,
+    368,
+    384,
 )
+VIT_WIDTH_OPTIONS = tuple(dim / VIT_EMBED_DIM for dim in VIT_EMBED_DIM_OPTIONS)
 
 # Backward-compatible names for older local scripts.
 VIT_TINY_DEPTH = VIT_DEPTH
@@ -75,69 +82,167 @@ def _normalize_width_multiplier(width_multipliers):
     return _normalize_width_multipliers(width_multipliers)[0]
 
 
+def _nearest_supported_embed_dim(width_multiplier):
+    raw_dim = int(round(VIT_EMBED_DIM * float(width_multiplier)))
+    return min(VIT_EMBED_DIM_OPTIONS, key=lambda dim: abs(dim - raw_dim))
+
+
 def _scaled_embed_dim(width_multiplier):
-    # Kept for compatibility with older callers. The searchable ViT no longer
-    # changes the residual stream width; pruning happens inside each MLP block.
-    return VIT_EMBED_DIM
+    width_multiplier = max(min(float(width_multiplier), 1.0), min(VIT_WIDTH_OPTIONS))
+    return _nearest_supported_embed_dim(width_multiplier)
 
 
 def _stage_index_for_block(block_number):
     return min((block_number - 1) // VIT_STAGE_DEPTHS[0], VIT_NUM_STAGES - 1)
 
 
-def _scaled_mlp_hidden_dim(width_multiplier):
-    width_multiplier = max(min(float(width_multiplier), 1.0), min(VIT_WIDTH_OPTIONS))
-    hidden_dim = int(round(VIT_MLP_HIDDEN_DIM * width_multiplier / VIT_HEAD_DIM)) * VIT_HEAD_DIM
-    return max(VIT_HEAD_DIM, min(VIT_MLP_HIDDEN_DIM, hidden_dim))
+def _block_dims_from_widths(width_multipliers):
+    stage_widths = _normalize_width_multipliers(width_multipliers)
+    stage_dims = [_scaled_embed_dim(width) for width in stage_widths]
+    block_dims = []
+    for stage_dim, depth in zip(stage_dims, VIT_STAGE_DEPTHS):
+        block_dims.extend([stage_dim] * depth)
+    return stage_dims, block_dims
 
 
 def _num_heads_for_embed_dim(embed_dim):
-    return max(1, embed_dim // VIT_HEAD_DIM)
+    for num_heads in (6, 4, 3, 2, 1):
+        if embed_dim % num_heads == 0:
+            return num_heads
+    return 1
 
 
-def _resize_block_mlp(block, hidden_dim):
-    current_hidden_dim = block.mlp.fc1.out_features
-    if current_hidden_dim == hidden_dim:
-        return
-    in_features = block.mlp.fc1.in_features
-    out_features = block.mlp.fc2.out_features
-    block.mlp.fc1 = nn.Linear(in_features, hidden_dim, bias=block.mlp.fc1.bias is not None)
-    block.mlp.fc2 = nn.Linear(hidden_dim, out_features, bias=block.mlp.fc2.bias is not None)
+def _is_vit_qkv_key(key):
+    return ".attn.qkv." in key
 
 
-def _create_vit_backbone(
-        num_classes,
-        image_size,
-        embed_dim=VIT_EMBED_DIM,
-        pretrained=False,
-        width_multipliers=None):
-    stage_widths = _normalize_width_multipliers(width_multipliers)
-    use_pretrained = pretrained and embed_dim == VIT_EMBED_DIM and all(width == 1.0 for width in stage_widths)
-    if use_pretrained:
-        return timm.create_model(
-            TIMM_VIT_MODEL,
-            pretrained=True,
-            num_classes=num_classes,
-            img_size=image_size,
-        )
+def is_vit_qkv_weight_key(key):
+    return key.endswith(".attn.qkv.weight")
 
-    model = VisionTransformer(
-        img_size=image_size,
-        patch_size=16,
-        in_chans=3,
-        num_classes=num_classes,
-        embed_dim=embed_dim,
-        depth=VIT_DEPTH,
-        num_heads=_num_heads_for_embed_dim(embed_dim),
-        mlp_ratio=VIT_BASE_MLP_RATIO,
-        qkv_bias=True,
-    )
 
-    for block_idx, block in enumerate(model.blocks, start=1):
-        stage_idx = _stage_index_for_block(block_idx)
-        hidden_dim = _scaled_mlp_hidden_dim(stage_widths[stage_idx])
-        _resize_block_mlp(block, hidden_dim)
-    return model
+def is_vit_qkv_bias_key(key):
+    return key.endswith(".attn.qkv.bias")
+
+
+def slice_vit_qkv_tensor(full_tensor, target_shape):
+    """Slice packed timm qkv tensors without mixing Q/K/V segments."""
+    if full_tensor.dim() == 2:
+        target_rows, target_cols = target_shape
+        if target_rows % 3 != 0 or full_tensor.shape[0] % 3 != 0:
+            return None
+        full_dim = full_tensor.shape[0] // 3
+        target_dim = target_rows // 3
+        if target_cols != target_dim or target_dim > full_dim or target_cols > full_tensor.shape[1]:
+            return None
+        q = full_tensor[0:target_dim, 0:target_dim]
+        k = full_tensor[full_dim:full_dim + target_dim, 0:target_dim]
+        v = full_tensor[2 * full_dim:2 * full_dim + target_dim, 0:target_dim]
+        return torch.cat([q, k, v], dim=0)
+
+    if full_tensor.dim() == 1:
+        target_rows = target_shape[0]
+        if target_rows % 3 != 0 or full_tensor.shape[0] % 3 != 0:
+            return None
+        full_dim = full_tensor.shape[0] // 3
+        target_dim = target_rows // 3
+        if target_dim > full_dim:
+            return None
+        q = full_tensor[0:target_dim]
+        k = full_tensor[full_dim:full_dim + target_dim]
+        v = full_tensor[2 * full_dim:2 * full_dim + target_dim]
+        return torch.cat([q, k, v], dim=0)
+
+    return None
+
+
+def make_vit_qkv_mask(full_shape, target_shape, device=None):
+    """Boolean mask mapping a packed full qkv tensor to a packed subnet qkv tensor."""
+    if len(full_shape) == 2:
+        full_rows, full_cols = full_shape
+        target_rows, target_cols = target_shape
+        if full_rows % 3 != 0 or target_rows % 3 != 0:
+            return None
+        full_dim = full_rows // 3
+        target_dim = target_rows // 3
+        if target_cols != target_dim or target_dim > full_dim or target_cols > full_cols:
+            return None
+        mask = torch.zeros(full_shape, dtype=torch.bool, device=device)
+        mask[0:target_dim, 0:target_dim] = True
+        mask[full_dim:full_dim + target_dim, 0:target_dim] = True
+        mask[2 * full_dim:2 * full_dim + target_dim, 0:target_dim] = True
+        return mask
+
+    if len(full_shape) == 1:
+        full_rows = full_shape[0]
+        target_rows = target_shape[0]
+        if full_rows % 3 != 0 or target_rows % 3 != 0:
+            return None
+        full_dim = full_rows // 3
+        target_dim = target_rows // 3
+        if target_dim > full_dim:
+            return None
+        mask = torch.zeros(full_shape, dtype=torch.bool, device=device)
+        mask[0:target_dim] = True
+        mask[full_dim:full_dim + target_dim] = True
+        mask[2 * full_dim:2 * full_dim + target_dim] = True
+        return mask
+
+    return None
+
+
+def slice_prefix_tensor(full_tensor, target_shape):
+    """Prefix-slice normal ViT tensors after hidden-width scaling."""
+    if full_tensor.dim() != len(target_shape):
+        return None
+    if any(target > full for target, full in zip(target_shape, full_tensor.shape)):
+        return None
+    slices = tuple(slice(0, target) for target in target_shape)
+    return full_tensor[slices]
+
+
+def make_prefix_mask(full_shape, target_shape, device=None):
+    """Boolean mask for normal prefix-sliced ViT tensors."""
+    if len(full_shape) != len(target_shape):
+        return None
+    if any(target > full for target, full in zip(target_shape, full_shape)):
+        return None
+    mask = torch.zeros(full_shape, dtype=torch.bool, device=device)
+    slices = tuple(slice(0, target) for target in target_shape)
+    mask[slices] = True
+    return mask
+
+
+class PatchEmbed(nn.Module):
+    def __init__(self, image_size, patch_size, num_channels, embed_dim):
+        super().__init__()
+        self.img_size = (image_size, image_size) if isinstance(image_size, int) else tuple(image_size)
+        self.patch_size = (patch_size, patch_size)
+        self.grid_size = (self.img_size[0] // patch_size, self.img_size[1] // patch_size)
+        self.num_patches = self.grid_size[0] * self.grid_size[1]
+        self.proj = nn.Conv2d(num_channels, embed_dim, kernel_size=patch_size, stride=patch_size)
+
+    def forward(self, x):
+        x = self.proj(x)
+        x = x.flatten(2).transpose(1, 2)
+        return x
+
+
+class HiddenDimAdapter(nn.Module):
+    """Parameter-free hidden-dimension adapter for variable-width ViT stages."""
+
+    def __init__(self, in_dim, out_dim):
+        super().__init__()
+        self.in_dim = in_dim
+        self.out_dim = out_dim
+
+    def forward(self, x):
+        if self.out_dim == self.in_dim:
+            return x
+        if self.out_dim < self.in_dim:
+            return x[..., :self.out_dim]
+        pad_shape = list(x.shape)
+        pad_shape[-1] = self.out_dim - self.in_dim
+        return torch.cat([x, x.new_zeros(pad_shape)], dim=-1)
 
 
 class ViTExitHead(nn.Module):
@@ -152,11 +257,11 @@ class ViTExitHead(nn.Module):
 
 class SearchableViT(nn.Module):
     """
-    Search wrapper around timm's ViT-Small implementation.
+    ViT-Small search wrapper using full hidden-width scaling.
 
-    The residual stream keeps the official ViT-Small embedding dimension.
-    Width multipliers prune the MLP hidden dimension in four transformer-block
-    stages, while early_exit_location controls depth.
+    Width multipliers control the residual hidden dimension of each 3-block
+    stage. The same dimension change applies to patch embedding, cls/pos
+    tokens, qkv, attention projection, MLP, LayerNorm, and classifier heads.
     """
 
     def __init__(
@@ -170,39 +275,81 @@ class SearchableViT(nn.Module):
     ):
         super().__init__()
         if num_channels != 3:
-            raise ValueError("timm ViT-Small wrapper currently expects RGB inputs.")
+            raise ValueError("ViT-Small wrapper currently expects RGB inputs.")
+        if pretrained:
+            raise ValueError(
+                "Pretrained timm ViT weights cannot be loaded directly into variable-width ViT. "
+                "Use the trained full-width supernet and QKV-aware slicing."
+            )
 
         self.num_classes = num_classes
         self.width_multipliers = _normalize_width_multipliers(width_multipliers)
-        self.embed_dim = VIT_EMBED_DIM
+        self.stage_dims, self.block_dims = _block_dims_from_widths(self.width_multipliers)
+        self.embed_dim = self.stage_dims[0]
+        self.final_embed_dim = self.block_dims[-1]
         self.early_exit_location = _normalize_exit_location(early_exit_location)
         self.num_channels = num_channels
         self.image_size = image_size
         self.pretrained = pretrained
 
-        base = _create_vit_backbone(
-            num_classes=num_classes,
-            image_size=image_size,
-            embed_dim=self.embed_dim,
-            pretrained=pretrained,
-            width_multipliers=self.width_multipliers,
-        )
+        self.patch_embed = PatchEmbed(image_size, patch_size=16, num_channels=num_channels, embed_dim=self.embed_dim)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.embed_dim))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.patch_embed.num_patches + 1, self.embed_dim))
+        self.pos_drop = nn.Dropout(p=0.0)
+        self.patch_drop = nn.Identity()
+        self.norm_pre = nn.Identity()
 
-        self.patch_embed = base.patch_embed
-        self.cls_token = base.cls_token
-        self.pos_embed = base.pos_embed
-        self.pos_drop = base.pos_drop
-        self.patch_drop = base.patch_drop
-        self.norm_pre = base.norm_pre
-        self.block = nn.ModuleList(list(base.blocks))
-        self.norm = base.norm
-        self.fc_norm = base.fc_norm
-        self.head_drop = base.head_drop
-        self.classifier = base.head
+        self.block = nn.ModuleList()
+        self.transitions = nn.ModuleDict()
+        prev_dim = self.embed_dim
+        for block_idx, dim in enumerate(self.block_dims, start=1):
+            if dim != prev_dim:
+                self.transitions[str(block_idx - 1)] = HiddenDimAdapter(prev_dim, dim)
+            self.block.append(
+                Block(
+                    dim=dim,
+                    num_heads=_num_heads_for_embed_dim(dim),
+                    mlp_ratio=VIT_BASE_MLP_RATIO,
+                    qkv_bias=True,
+                )
+            )
+            prev_dim = dim
+
+        self.norm = nn.LayerNorm(self.final_embed_dim)
+        self.fc_norm = nn.Identity()
+        self.head_drop = nn.Dropout(p=0.0)
+        self.classifier = nn.Linear(self.final_embed_dim, num_classes)
 
         self.early_exit_classifier = None
         if self.early_exit_location is not None and self.early_exit_location < VIT_DEPTH:
-            self.early_exit_classifier = ViTExitHead(self.embed_dim, num_classes)
+            exit_dim = self.block_dims[self.early_exit_location - 1]
+            self.early_exit_classifier = ViTExitHead(exit_dim, num_classes)
+
+        self._init_weights()
+
+    @property
+    def blocks(self):
+        return self.block
+
+    @property
+    def head(self):
+        return self.classifier
+
+    def _init_weights(self):
+        nn.init.trunc_normal_(self.pos_embed, std=0.02)
+        nn.init.trunc_normal_(self.cls_token, std=0.02)
+        for module in self.modules():
+            if isinstance(module, nn.Linear):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.Conv2d):
+                nn.init.trunc_normal_(module.weight, std=0.02)
+                if module.bias is not None:
+                    nn.init.zeros_(module.bias)
+            elif isinstance(module, nn.LayerNorm):
+                nn.init.ones_(module.weight)
+                nn.init.zeros_(module.bias)
 
     def _pos_embed(self, x):
         cls_token = self.cls_token.expand(x.shape[0], -1, -1)
@@ -215,7 +362,10 @@ class SearchableViT(nn.Module):
         x = self._pos_embed(x)
         x = self.patch_drop(x)
         x = self.norm_pre(x)
-        for block in self.block[:block_count]:
+        for block_idx, block in enumerate(self.block[:block_count], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                x = self.transitions[transition_key](x)
             x = block(x)
         return x
 
@@ -231,13 +381,15 @@ class SearchableViT(nn.Module):
 
     def get_weight_layer_cutoff(self, exit_location):
         exit_location = _normalize_exit_location(exit_location)
-        # patch projection + qkv/proj/fc1/fc2 for each executed transformer block
         return 1 + 4 * exit_location
 
     def iter_nuclear_norm_modules(self, early_exit_location=None):
         block_count = VIT_DEPTH if early_exit_location is None else _normalize_exit_location(early_exit_location)
         yield self.patch_embed.proj
-        for block in self.block[:block_count]:
+        for block_idx, block in enumerate(self.block[:block_count], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                yield self.transitions[transition_key]
             yield block.attn.qkv
             yield block.attn.proj
             yield block.mlp.fc1
@@ -249,17 +401,15 @@ class SearchableViT(nn.Module):
         total += sum(p.numel() for p in self.patch_embed.parameters())
         total += self.cls_token.numel()
         total += self.pos_embed.numel()
-        total += sum(p.numel() for p in self.pos_drop.parameters())
-        total += sum(p.numel() for p in self.patch_drop.parameters())
-        total += sum(p.numel() for p in self.norm_pre.parameters())
-        for block in self.block[:block_count]:
+        for block_idx, block in enumerate(self.block[:block_count], start=1):
+            transition_key = str(block_idx - 1)
+            if transition_key in self.transitions:
+                total += sum(p.numel() for p in self.transitions[transition_key].parameters())
             total += sum(p.numel() for p in block.parameters())
         if block_count < VIT_DEPTH and self.early_exit_classifier is not None:
             total += sum(p.numel() for p in self.early_exit_classifier.parameters())
         else:
             total += sum(p.numel() for p in self.norm.parameters())
-            total += sum(p.numel() for p in self.fc_norm.parameters())
-            total += sum(p.numel() for p in self.head_drop.parameters())
             total += sum(p.numel() for p in self.classifier.parameters())
         return total
 
@@ -270,6 +420,24 @@ class SearchableViT(nn.Module):
 
         x = self._forward_tokens(x, VIT_DEPTH)
         return self._forward_final(x)
+
+
+def _create_vit_backbone(
+        num_classes,
+        image_size,
+        embed_dim=VIT_EMBED_DIM,
+        pretrained=False,
+        width_multipliers=None):
+    if width_multipliers is None:
+        width_multipliers = [embed_dim / VIT_EMBED_DIM] * VIT_NUM_STAGES
+    return SearchableViT(
+        num_classes=num_classes,
+        width_multipliers=width_multipliers,
+        early_exit_location=None,
+        num_channels=3,
+        image_size=image_size,
+        pretrained=pretrained,
+    )
 
 
 def searchable_vit_small(

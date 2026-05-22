@@ -16,6 +16,18 @@ from train import execute_epoch
 from utils.grad_traceback import get_downscale_index
 from utils.phase_timing import append_phase_timing_rows, phase_timing_enabled
 from utils.utils import save_checkpoint
+try:
+    from models.searchable_vit import (
+        is_vit_qkv_bias_key,
+        is_vit_qkv_weight_key,
+        make_prefix_mask,
+        make_vit_qkv_mask,
+        slice_prefix_tensor,
+        slice_vit_qkv_tensor,
+    )
+except Exception:
+    is_vit_qkv_bias_key = is_vit_qkv_weight_key = lambda _key: False
+    make_prefix_mask = make_vit_qkv_mask = slice_prefix_tensor = slice_vit_qkv_tensor = None
 from time_domain_decomposition import create_tdd_components, DynamicScheduler, TimeDomainDecomposer
 from hierarchical_model_selector import (
     find_best_config_for_distribution,
@@ -43,7 +55,10 @@ class Federator:
         self.sample_rate = args.sample_rate
         self.alpha = args.alpha
         self.num_levels = len(self.vertical_scale_ratios)
-        self.idx_dicts = [get_downscale_index(self.global_model, args, s) for s in self.vertical_scale_ratios]
+        if self._is_vit_model(args):
+            self.idx_dicts = []
+        else:
+            self.idx_dicts = [get_downscale_index(self.global_model, args, s) for s in self.vertical_scale_ratios]
         self.client_groups = client_groups
 
         self.use_gpu = args.use_gpu
@@ -55,6 +70,8 @@ class Federator:
         self.tdd_level_configs = None  # Will be initialized on first round with participating levels
 
         # New TDD: Device-level mixing (Normal + Growth)
+        self.level_configs = None  # Normal hierarchical configs for all modes
+        self.level_configs_key = None
         self.tdd_normal_configs = None  # Normal configs for each level
         self.tdd_growth_configs = None  # Growth configs for each level
         self.tdd_growth_ratio = getattr(args, 'tdd_growth_ratio', 0.5)  # 50% devices use Growth
@@ -67,6 +84,28 @@ class Federator:
             print(f"[TDD] Time-Domain Decomposition ENABLED")
             print(f"[TDD] Device-level mixing: {self.tdd_growth_ratio*100:.0f}% Growth, {(1-self.tdd_growth_ratio)*100:.0f}% Normal")
             print(f"[TDD] Growth budget scale: {self.tdd_growth_budget_scale:.2f}x")
+
+    def _refresh_idx_dicts(self, participating_levels=None, args=None):
+        args = args or self.args
+        level_configs = None
+        if participating_levels is not None and self._is_vit_model(args):
+            level_configs = self._ensure_level_configs(participating_levels, args)
+
+        idx_dicts = []
+        for level, scale in enumerate(self.vertical_scale_ratios):
+            width_override = None
+            if level_configs and level in level_configs:
+                width_override = level_configs[level].get('width_multipliers')
+            idx_dicts.append(
+                get_downscale_index(
+                    self.global_model,
+                    args,
+                    scale,
+                    width_multipliers_override=width_override,
+                )
+            )
+        self.idx_dicts = idx_dicts
+        return self.idx_dicts
 
     def _empty_val_results(self):
         nan = float('nan')
@@ -115,7 +154,6 @@ class Federator:
 
             print(f'\n | Global Training Round : {round_idx + 1} |\n')
             print(' | Regenerating masks for the current round... |\n')
-            self.idx_dicts = [get_downscale_index(self.global_model, args, s) for s in self.vertical_scale_ratios]
 
             train_loss, val_results, local_val_results, did_validate = \
                 self.execute_round(train_set, val_set, user_groups, criterion, args, batch_size,
@@ -433,9 +471,10 @@ class Federator:
                 config_library_path = f"{model_name}_{dataset_name}_architecture_library.json"
 
             # Load configurations
+            load_model_type = "vit" if model_name == "vit_small" else model_name
             all_model_configs = load_configs_from_json(
                 config_library_path,
-                model_type=model_name,
+                model_type=load_model_type,
                 dataset=dataset_name
             )
 
@@ -472,8 +511,31 @@ class Federator:
             return best_configs
 
         except Exception as e:
+            if self._is_vit_model(args):
+                raise
             print(f"[TDD] Warning: Failed to get level configs: {e}")
             return None
+
+    def _ensure_level_configs(self, participating_levels, args):
+        config_key = (
+            tuple(participating_levels),
+            tuple(getattr(args, 'flops_constraints', []) or []),
+            tuple(getattr(args, 'params_constraints', []) or []),
+            getattr(args, 'config_library_path', None),
+            getattr(args, 'data', None),
+            getattr(args, 'arch', None),
+            bool(getattr(args, 'independent_selection', False)),
+        )
+        if self.level_configs is None or self.level_configs_key != config_key:
+            self.level_configs = self._get_level_configs(participating_levels, args)
+            self.level_configs_key = config_key
+        return self.level_configs
+
+    def _is_vit_model(self, args=None):
+        args = args or self.args
+        arch = str(getattr(args, 'arch', '')).lower()
+        model_name = str(getattr(args, 'model', '')).lower()
+        return 'vit' in arch or 'vit' in model_name or hasattr(self.global_model, 'patch_embed')
 
     def execute_round(self, train_set, val_set, user_groups, criterion, args, batch_size, train_params, round_idx):
         timing_enabled = phase_timing_enabled(args)
@@ -491,11 +553,13 @@ class Federator:
         scales = [self.vertical_scale_ratios[level] for level in levels]
         levels_in_round = [self.get_level(cid) for cid in client_idxs]
         participating_levels = sorted(list(set(l for l in levels_in_round if l != -1)))
+        level_configs = self._ensure_level_configs(participating_levels, args)
+        self._refresh_idx_dicts(participating_levels, args)
 
         # === TDD: Initialize configs on first round ===
         if self.tdd_enabled and self.tdd_normal_configs is None:
             # Get normal configs from beam search
-            self.tdd_normal_configs = self._get_level_configs(participating_levels, args)
+            self.tdd_normal_configs = level_configs
 
             if self.tdd_normal_configs is not None:
                 print(f"\n[TDD] Normal configs from beam search:")
@@ -855,11 +919,16 @@ class Federator:
         for key in w_avg.keys():
 
             if 'num_batches_tracked' in key:
-                w_avg[key] = w[0][key]
+                for local_weight in w:
+                    if key in local_weight:
+                        w_avg[key] = local_weight[key]
+                        break
                 continue
 
             if 'running' in key:
-                w_avg[key] = sum([w_[key] for w_ in w]) / len(w)
+                matching = [w_[key] for w_ in w if key in w_ and tuple(w_[key].shape) == tuple(w_avg[key].shape)]
+                if matching:
+                    w_avg[key] = sum(matching) / len(matching)
                 continue
 
             tmp = torch.zeros_like(w_avg[key])
@@ -873,6 +942,27 @@ class Federator:
                         tmp += w[i][key]
                         count += 1
                         continue
+                    if is_vit_qkv_weight_key(key) or is_vit_qkv_bias_key(key):
+                        idx = make_vit_qkv_mask(
+                            tuple(w_avg[key].shape),
+                            tuple(w[i][key].shape),
+                            device=w_avg[key].device,
+                        )
+                        if idx is None:
+                            raise RuntimeError(f"Invalid ViT qkv aggregation shape for {key}: {w_avg[key].shape} <- {w[i][key].shape}")
+                        tmp[idx] += w[i][key].flatten()
+                        count[idx] += 1
+                        continue
+                    if self._is_vit_model(args):
+                        idx = make_prefix_mask(
+                            tuple(w_avg[key].shape),
+                            tuple(w[i][key].shape),
+                            device=w_avg[key].device,
+                        )
+                        if idx is not None:
+                            tmp[idx] += w[i][key].flatten()
+                            count[idx] += 1
+                            continue
                     idx = self.idx_dicts[levels[i]][key]
                     idx = self.fix_idx_array(idx, w[i][key].shape)
                     tmp[idx] += w[i][key].flatten()
@@ -934,20 +1024,32 @@ class Federator:
         return idx_array
 
     def get_local_split(self, level, scale,participating_levels):
-        if scale == 1:
+        level_configs = self._ensure_level_configs(participating_levels, self.args)
+        level_config = level_configs.get(level) if level_configs else None
+        vit_widths = None
+        if self._is_vit_model(self.args) and level_config is not None:
+            vit_widths = level_config.get('width_multipliers')
+
+        if scale == 1 and vit_widths is None:
             return copy.deepcopy(self.global_model)
 
         model_kwargs = copy.deepcopy(self.global_model.stored_inp_kwargs)
-        if 'scale' in model_kwargs.keys():
-            model_kwargs['scale'] = scale
+        if vit_widths is not None:
+            model_kwargs['scale'] = 1.0
+            model_kwargs['width_multipliers_override'] = vit_widths
         else:
-            model_kwargs['params']['scale'] = scale
+            if 'scale' in model_kwargs.keys():
+                model_kwargs['scale'] = scale
+            else:
+                model_kwargs['params']['scale'] = scale
         local_model = type(self.global_model)(**model_kwargs,)
         if 'bert' in str(type(local_model)):
             local_model.add_exits(model_kwargs['ee_layer_locations'])
 
         local_state_dict = local_model.state_dict()
         global_state_dict = self.global_model.state_dict()
+        if len(self.idx_dicts) <= level:
+            self._refresh_idx_dicts(participating_levels, self.args)
         level_idx_dict = self.idx_dicts[level]
 
         for n, p in global_state_dict.items():
@@ -970,6 +1072,19 @@ class Federator:
             if tuple(global_shape) == tuple(local_shape):
                 local_state_dict[n] = p.clone()
                 continue
+
+            if is_vit_qkv_weight_key(n) or is_vit_qkv_bias_key(n):
+                sliced_param = slice_vit_qkv_tensor(p, local_shape)
+                if sliced_param is None or tuple(sliced_param.shape) != tuple(local_shape):
+                    raise RuntimeError(f"Invalid ViT qkv split shape for {n}: {global_shape} -> {local_shape}")
+                local_state_dict[n] = sliced_param.clone()
+                continue
+
+            if self._is_vit_model(self.args):
+                sliced_param = slice_prefix_tensor(p, local_shape)
+                if sliced_param is not None and tuple(sliced_param.shape) == tuple(local_shape):
+                    local_state_dict[n] = sliced_param.clone()
+                    continue
 
             idx_array = self.fix_idx_array(level_idx_dict[n], local_shape)
             local_state_dict[n] = p[idx_array].reshape(local_shape)

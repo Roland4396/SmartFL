@@ -87,7 +87,7 @@ def train_supernet(args):
             width_multipliers=[1.0] * 12,
             num_channels=3,
             image_size=image_size,
-            pretrained=True
+            pretrained=False
         ).to(device)
     else:
         raise ValueError(f"Unsupported model type: {model_type}. Supported: 'resnet', 'vgg', 'mobilenet', 'convnext', 'vit'")

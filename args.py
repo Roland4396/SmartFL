@@ -30,6 +30,8 @@ def modify_args(args):
         or (hasattr(args, 'model') and args.model and args.model.lower() == 'vit')
     ):
         args.image_size = (224, 224)
+        if getattr(args, 'vertical_scale_ratios', None) == [0.7, 0.7, 0.75, 1]:
+            args.vertical_scale_ratios = [136 / 384, 192 / 384, 272 / 384, 1.0]
 
     if not hasattr(args, "save_path") or args.save_path is None:
         # Extract model name from arch (e.g., 'mobilenet_v2_4' -> 'mobilenet')

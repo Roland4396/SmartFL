@@ -25,6 +25,12 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
 
         # Handle both old format (direct list) and new format (with metadata)
         if isinstance(data, list):
+            if model_type == "vit":
+                raise ValueError(
+                    "Invalid ViT architecture library: legacy list format has no "
+                    "architecture_space metadata. Regenerate Stage 1/2 ViT artifacts "
+                    "with architecture_space='vit_stage_hidden_width'."
+                )
             # Old format: direct list of configurations
             print(f"⚠ Warning: Using legacy config format without metadata")
             configs = data
@@ -32,6 +38,15 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
             # New format: with metadata
             metadata = data.get("metadata", {})
             configs = data["configurations"]
+
+            if (model_type == "vit" or metadata.get("model_type") == "vit"):
+                architecture_space = metadata.get("architecture_space")
+                if architecture_space != "vit_stage_hidden_width":
+                    raise ValueError(
+                        "Invalid ViT architecture library: expected "
+                        "architecture_space='vit_stage_hidden_width', got "
+                        f"{architecture_space!r}. Regenerate Stage 1/2 ViT artifacts."
+                    )
 
             # Validate model type compatibility
             if model_type and metadata.get("model_type"):
@@ -131,7 +146,7 @@ def get_mobilenet_prefix_len_from_exit_location(exit_loc):
 
 def get_vit_prefix_len_from_exit_location(exit_loc):
     """
-    ViT width multipliers control four MLP stages, each covering three blocks.
+    ViT width multipliers control four hidden-dimension stages, each covering three blocks.
     """
     if exit_loc < 1 or exit_loc > 12:
         raise ValueError(f"Unsupported ViT early-exit location: {exit_loc}")
@@ -180,7 +195,7 @@ def get_actual_channels(width_multipliers, model_type="resnet"):
         base_channels = [32, 64, 128, 256]
         return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
     elif model_type == "vit":
-        base_channels = [1536] * len(width_multipliers)
+        base_channels = [384] * len(width_multipliers)
         return [int(base_channels[i] * width_multipliers[i]) for i in range(len(width_multipliers))]
     else:
         # Fallback to resnet for unknown model types
@@ -220,7 +235,7 @@ def is_sub_model(config_sub, config_super):
 
     if model_type == "convnext" and config_sub['early_exit_location'] >= config_super['early_exit_location']:
         return False
-    if model_type == "vit" and config_sub['early_exit_location'] >= config_super['early_exit_location']:
+    if model_type == "vit" and config_sub['early_exit_location'] > config_super['early_exit_location']:
         return False
 
     if model_type == "vgg":

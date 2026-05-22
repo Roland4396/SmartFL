@@ -26,6 +26,10 @@ from models.searchable_vit import (
     VIT_NUM_STAGES,
     VIT_SEARCH_EXIT_LOCATIONS,
     VIT_WIDTH_OPTIONS,
+    is_vit_qkv_bias_key,
+    is_vit_qkv_weight_key,
+    slice_prefix_tensor,
+    slice_vit_qkv_tensor,
     searchable_vit_small,
 )
 from utils.metrics import calculate_total_conv_nuclear_norm, calculate_model_size
@@ -362,13 +366,26 @@ class ArchitectureSearchEnv(gym.Env):
                 if supernet_param.shape == subnet_param.shape:
                     subnet_param.data.copy_(supernet_param.data)
                 else:
+                    if self.model_type == "vit" and (
+                        is_vit_qkv_weight_key(key) or is_vit_qkv_bias_key(key)
+                    ):
+                        sliced_param = slice_vit_qkv_tensor(supernet_param, subnet_param.shape)
+                        if sliced_param is not None and sliced_param.shape == subnet_param.shape:
+                            subnet_param.data.copy_(sliced_param)
+                        continue
+
                     # Handle width scaling for Conv/Linear/Norm/positional tensors.
                     if supernet_param.dim() == subnet_param.dim():
-                        slices = tuple(
-                            slice(0, min(src, dst))
-                            for src, dst in zip(supernet_param.shape, subnet_param.shape)
-                        )
-                        sliced_param = supernet_param[slices]
+                        sliced_param = slice_prefix_tensor(
+                            supernet_param,
+                            subnet_param.shape,
+                        ) if self.model_type == "vit" else None
+                        if sliced_param is None:
+                            slices = tuple(
+                                slice(0, min(src, dst))
+                                for src, dst in zip(supernet_param.shape, subnet_param.shape)
+                            )
+                            sliced_param = supernet_param[slices]
                         if sliced_param.shape == subnet_param.shape:
                             subnet_param.data.copy_(sliced_param)
         
@@ -911,9 +928,16 @@ def _load_matching_weights(subnet_model, supernet_state_dict: Dict) -> Dict:
         if supernet_param.shape == subnet_param.shape:
             subnet_param.data.copy_(supernet_param.data)
             continue
+        if is_vit_qkv_weight_key(key) or is_vit_qkv_bias_key(key):
+            sliced_param = slice_vit_qkv_tensor(supernet_param, subnet_param.shape)
+            if sliced_param is not None and sliced_param.shape == subnet_param.shape:
+                subnet_param.data.copy_(sliced_param)
+            continue
         if supernet_param.dim() == subnet_param.dim():
-            slices = tuple(slice(0, min(src, dst)) for src, dst in zip(supernet_param.shape, subnet_param.shape))
-            sliced_param = supernet_param[slices]
+            sliced_param = slice_prefix_tensor(supernet_param, subnet_param.shape)
+            if sliced_param is None:
+                slices = tuple(slice(0, min(src, dst)) for src, dst in zip(supernet_param.shape, subnet_param.shape))
+                sliced_param = supernet_param[slices]
             if sliced_param.shape == subnet_param.shape:
                 subnet_param.data.copy_(sliced_param)
     return subnet_state_dict
@@ -995,6 +1019,7 @@ def generate_vit_architecture_library(
             "num_classes": num_classes,
             "search_method": "alignfl_width_depth_vit",
             "backbone": "vit_small_patch16_224",
+            "architecture_space": "vit_stage_hidden_width",
             "exit_granularity": "transformer_block",
             "width_options": list(VIT_WIDTH_OPTIONS),
             "exit_locations": list(VIT_SEARCH_EXIT_LOCATIONS),
@@ -1177,7 +1202,7 @@ def generate_architecture_library(supernet_path: str,
             "dataset": dataset,
             "num_classes": num_classes,
             "search_method": "ppo",
-            "architecture_space": "vit_stage_mlp_width" if model_type.lower() == "vit" else "stage_width",
+            "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
             "generation_timestamp": str(torch.cuda.current_device() if torch.cuda.is_available() else "cpu"),
             "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
@@ -1346,7 +1371,7 @@ def generate_random_architecture_library(supernet_path: str,
             "dataset": dataset,
             "num_classes": num_classes,
             "search_method": "pure_random_search",
-            "architecture_space": "vit_stage_mlp_width" if model_type.lower() == "vit" else "stage_width",
+            "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
             "exit_granularity": "bottleneck" if model_type.lower() == "mobilenet" else "default",
             "exit_location_range": list(exit_location_range),
