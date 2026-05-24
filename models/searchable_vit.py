@@ -11,32 +11,15 @@ TIMM_VIT_MODEL = "vit_small_patch16_224"
 VIT_INPUT_SIZE = 224
 VIT_DEPTH = 12
 VIT_EMBED_DIM = 384
-VIT_HEAD_DIM = 64
+VIT_NUM_HEADS = 6
+VIT_MIN_EMBED_DIM = VIT_NUM_HEADS
 VIT_NUM_STAGES = 4
 VIT_STAGE_DEPTHS = (3, 3, 3, 3)
 VIT_BASE_MLP_RATIO = 4.0
 VIT_MLP_HIDDEN_DIM = int(VIT_EMBED_DIM * VIT_BASE_MLP_RATIO)
 VIT_OFFICIAL_EXIT_LOCATIONS = (8, 9, 10, 11, 12)
 VIT_SEARCH_EXIT_LOCATIONS = tuple(range(3, VIT_DEPTH + 1))
-VIT_EMBED_DIM_OPTIONS = (
-    56,
-    72,
-    112,
-    136,
-    152,
-    160,
-    176,
-    192,
-    216,
-    224,
-    232,
-    256,
-    272,
-    296,
-    312,
-    368,
-    384,
-)
+VIT_EMBED_DIM_OPTIONS = tuple(range(VIT_MIN_EMBED_DIM, VIT_EMBED_DIM + 1, VIT_NUM_HEADS))
 VIT_WIDTH_OPTIONS = tuple(dim / VIT_EMBED_DIM for dim in VIT_EMBED_DIM_OPTIONS)
 
 # Backward-compatible names for older local scripts.
@@ -85,11 +68,12 @@ def _normalize_width_multiplier(width_multipliers):
 
 def _nearest_supported_embed_dim(width_multiplier):
     raw_dim = int(round(VIT_EMBED_DIM * float(width_multiplier)))
+    raw_dim = max(VIT_MIN_EMBED_DIM, min(VIT_EMBED_DIM, raw_dim))
     return min(VIT_EMBED_DIM_OPTIONS, key=lambda dim: abs(dim - raw_dim))
 
 
 def _scaled_embed_dim(width_multiplier):
-    width_multiplier = max(min(float(width_multiplier), 1.0), min(VIT_WIDTH_OPTIONS))
+    width_multiplier = max(min(float(width_multiplier), 1.0), VIT_MIN_EMBED_DIM / VIT_EMBED_DIM)
     return _nearest_supported_embed_dim(width_multiplier)
 
 
@@ -107,10 +91,9 @@ def _block_dims_from_widths(width_multipliers):
 
 
 def _num_heads_for_embed_dim(embed_dim):
-    for num_heads in (6, 4, 3, 2, 1):
-        if embed_dim % num_heads == 0:
-            return num_heads
-    return 1
+    if embed_dim % VIT_NUM_HEADS != 0:
+        raise ValueError(f"ViT hidden dim {embed_dim} must be divisible by {VIT_NUM_HEADS} heads")
+    return VIT_NUM_HEADS
 
 
 def _is_vit_qkv_key(key):

@@ -424,7 +424,9 @@ def library_ready_for_arch(library_path: Path, arch: str) -> bool:
         return False
     if not configs:
         return False
-    if metadata.get("architecture_space") != "vit_stage_hidden_width":
+    if metadata.get("architecture_space") != "vit_stage_hidden_width_fixed_heads":
+        return False
+    if metadata.get("fixed_num_heads") != 6:
         return False
     if metadata.get("flops_image_size") != 224 or metadata.get("nuclear_norm_image_size") != 224:
         return False

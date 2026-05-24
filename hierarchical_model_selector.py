@@ -29,7 +29,7 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
                 raise ValueError(
                     "Invalid ViT architecture library: legacy list format has no "
                     "architecture_space metadata. Regenerate Stage 1/2 ViT artifacts "
-                    "with architecture_space='vit_stage_hidden_width'."
+                    "with architecture_space='vit_stage_hidden_width_fixed_heads'."
                 )
             # Old format: direct list of configurations
             print(f"⚠ Warning: Using legacy config format without metadata")
@@ -41,10 +41,10 @@ def load_configs_from_json(filepath, model_type=None, dataset=None):
 
             if (model_type == "vit" or metadata.get("model_type") == "vit"):
                 architecture_space = metadata.get("architecture_space")
-                if architecture_space != "vit_stage_hidden_width":
+                if architecture_space != "vit_stage_hidden_width_fixed_heads":
                     raise ValueError(
                         "Invalid ViT architecture library: expected "
-                        "architecture_space='vit_stage_hidden_width', got "
+                        "architecture_space='vit_stage_hidden_width_fixed_heads', got "
                         f"{architecture_space!r}. Regenerate Stage 1/2 ViT artifacts."
                     )
 

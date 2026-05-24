@@ -22,8 +22,11 @@ from models.searchable_vgg import searchable_vgg16
 from models.searchable_mobilenet import searchable_mobilenet_v2
 from models.searchable_convnext import searchable_convnext
 from models.searchable_vit import (
+    VIT_EMBED_DIM,
     VIT_DEPTH,
+    VIT_EMBED_DIM_OPTIONS,
     VIT_INPUT_SIZE,
+    VIT_NUM_HEADS,
     VIT_NUM_STAGES,
     VIT_SEARCH_EXIT_LOCATIONS,
     VIT_WIDTH_OPTIONS,
@@ -927,6 +930,15 @@ def _dataset_num_classes_and_search_image_size(dataset: str, model_type: str) ->
     return num_classes, image_size
 
 
+def _vit_search_metadata() -> Dict:
+    return {
+        "architecture_space": "vit_stage_hidden_width_fixed_heads",
+        "hidden_dim_rule": f"multiples_of_{VIT_NUM_HEADS}_up_to_{VIT_EMBED_DIM}",
+        "fixed_num_heads": VIT_NUM_HEADS,
+        "hidden_dim_options": list(VIT_EMBED_DIM_OPTIONS),
+    }
+
+
 def _load_matching_weights(subnet_model, supernet_state_dict: Dict) -> Dict:
     subnet_state_dict = subnet_model.state_dict()
     for key, supernet_param in supernet_state_dict.items():
@@ -962,7 +974,10 @@ def generate_vit_architecture_library(
     start_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     print(f"=== ViT-Small Width/Depth Library Generation [{start_time}] ===")
     print("Backbone: timm vit_small_patch16_224")
-    print(f"Search space: widths {list(VIT_WIDTH_OPTIONS)}, exits after blocks {list(VIT_SEARCH_EXIT_LOCATIONS)}")
+    print(
+        f"Search space: hidden dims {list(VIT_EMBED_DIM_OPTIONS)}, "
+        f"widths {list(VIT_WIDTH_OPTIONS)}, exits after blocks {list(VIT_SEARCH_EXIT_LOCATIONS)}"
+    )
 
     try:
         supernet_state_dict = torch.load(supernet_path, map_location='cpu')
@@ -1027,7 +1042,7 @@ def generate_vit_architecture_library(
             "num_classes": num_classes,
             "search_method": "alignfl_width_depth_vit",
             "backbone": "vit_small_patch16_224",
-            "architecture_space": "vit_stage_hidden_width",
+            **_vit_search_metadata(),
             "image_size": image_size,
             "flops_image_size": image_size,
             "nuclear_norm_image_size": image_size,
@@ -1196,7 +1211,7 @@ def generate_architecture_library(supernet_path: str,
             "dataset": dataset,
             "num_classes": num_classes,
             "search_method": "ppo",
-            "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
+            **(_vit_search_metadata() if model_type.lower() == "vit" else {"architecture_space": "stage_width"}),
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
             "image_size": image_size,
             "flops_image_size": image_size,
@@ -1353,7 +1368,7 @@ def generate_random_architecture_library(supernet_path: str,
             "dataset": dataset,
             "num_classes": num_classes,
             "search_method": "pure_random_search",
-            "architecture_space": "vit_stage_hidden_width" if model_type.lower() == "vit" else "stage_width",
+            **(_vit_search_metadata() if model_type.lower() == "vit" else {"architecture_space": "stage_width"}),
             "nuclear_norm_source": "token_representation" if model_type.lower() == "vit" else "conv_weight",
             "image_size": image_size,
             "flops_image_size": image_size,
